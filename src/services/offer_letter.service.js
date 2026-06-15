@@ -322,8 +322,18 @@ class OfferLetterService {
 
     logger.info(`Offer letter record created: letter_id=${letter.id} for employee ${employee.emp_code}`);
 
-    // 3. Send email with PDF attachment
-    const emailResult = await emailService.sendWelcomeEmail(employee, plainPassword, pdfBuffer);
+    // 3. Send email with PDF attachment (fire-and-forget — don't block the response)
+    //    Render free tier blocks outbound SMTP, so email may fail but the employee
+    //    is already fully created and the letter is saved.
+    let emailResult = { accepted: [], messageId: 'fire-and-forget' };
+    emailService
+      .sendWelcomeEmail(employee, plainPassword, pdfBuffer)
+      .then((result) => {
+        logger.info(`Welcome email sent to ${employee.email} — ${result.messageId}`);
+      })
+      .catch((err) => {
+        logger.error(`Welcome email failed for ${employee.email}: ${err.message}`);
+      });
 
     return { letter, emailResult };
   }
