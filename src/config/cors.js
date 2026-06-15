@@ -23,8 +23,10 @@ const corsOptions = {
     const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
     // Always allow any *.onrender.com subdomain (Render preview + production URLs)
     const isRender = /^https:\/\/[a-zA-Z0-9-]+\.onrender\.com$/.test(origin);
+    // Always allow any *.vercel.app subdomain (Vercel preview + production URLs)
+    const isVercel = /^https:\/\/[a-zA-Z0-9-]+\.vercel\.app$/.test(origin);
 
-    if (isLocalhost || isRender || allowedOrigins.includes(origin)) {
+    if (isLocalhost || isRender || isVercel || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error(`CORS: origin '${origin}' not allowed`));
