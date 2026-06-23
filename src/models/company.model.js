@@ -45,7 +45,6 @@ const Company = sequelize.define('Company', {
   timestamps: true,
   paranoid: true,
   indexes: [
-    { fields: ['name'] },
     { fields: ['is_active'] },
   ],
 });

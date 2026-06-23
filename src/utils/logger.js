@@ -6,7 +6,8 @@ const { combine, timestamp, printf, colorize } = winston.format;
 // Custom log format
 const logFormat = printf(({ level, message, timestamp, stack }) => {
   if (stack) {
-    return `${timestamp} [${level}]: ${stack}`;
+    // Some errors don't have the message in the stack string or are passed strangely
+    return `${timestamp} [${level}]: ${message}\n${stack}`;
   }
   return `${timestamp} [${level}]: ${message}`;
 });
