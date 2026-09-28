@@ -468,12 +468,12 @@ class AuthService {
       ? employee.salaryStructures[0]
       : null;
 
-    // Fetch ALL active offices for the employee's company so the mobile
+    // Fetch ALL active offices in the system so the mobile
     // app can validate geo-fence against every office location (not just
-    // the employee's primary office). This enables multi-location punch
-    // in/out — e.g. punch in from Indore office 1, punch out from office 2.
+    // the employee's primary office). This enables universal punch
+    // in/out across the group — e.g. punch in from any active branch.
     const companyOffices = await Office.findAll({
-      where: { company_id: employee.company_id, is_active: true },
+      where: { is_active: true },
       attributes: ['id', 'name', 'address', 'city', 'latitude', 'longitude', 'radius_meters'],
       order: [['name', 'ASC']],
     });
