@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth.middleware');
-const { authorize, selfOrAdmin } = require('../middleware/role.middleware');
+const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const documentController = require('../controllers/document.controller');
 
 // Multer setup — use memory storage so we can write the buffer to local storage
@@ -41,15 +41,15 @@ router.post('/upload', upload.single('file'), documentController.uploadDocument)
 router.post('/upload/multiple', upload.array('files', 10), documentController.uploadMultipleDocuments);
 
 // Admin/HR: Upload documents for a specific employee
-router.post('/upload/:employeeId', authorize('admin', 'hr'), upload.single('file'), documentController.uploadDocumentForEmployee);
+router.post('/upload/:employeeId', requirePermission('employees:update'), upload.single('file'), documentController.uploadDocumentForEmployee);
 
-router.post('/upload/multiple/:employeeId', authorize('admin', 'hr'), upload.array('files', 10), documentController.uploadMultipleDocumentsForEmployee);
+router.post('/upload/multiple/:employeeId', requirePermission('employees:update'), upload.array('files', 10), documentController.uploadMultipleDocumentsForEmployee);
 
 router.get('/my/:id', documentController.getDocumentById);
 
 // Admin/HR routes
 router.get('/employee/:employeeId', selfOrAdmin(), documentController.getEmployeeDocuments);
-router.patch('/:id/verify', authorize('admin', 'hr'), documentController.verifyDocument);
-router.delete('/:id', authorize('admin', 'hr'), documentController.deleteDocument);
+router.patch('/:id/verify', requirePermission('employees:update'), documentController.verifyDocument);
+router.delete('/:id', requirePermission('employees:delete'), documentController.deleteDocument);
 
 module.exports = router;

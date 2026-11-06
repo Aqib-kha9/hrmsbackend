@@ -7,6 +7,7 @@ const logger = require('./utils/logger');
 const corsOptions = require('./config/cors');
 const { errorHandler } = require('./middleware/error.middleware');
 const routes = require('./routes');
+const env = require('./config/env');
 
 const app = express();
 
@@ -15,7 +16,12 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ── Security ──
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+  })
+);
 
 // ── CORS ──
 app.use(cors(corsOptions));
@@ -46,12 +52,20 @@ const authLimiter = rateLimit({
 // Applied only to auth routes (mounted below after route registration)
 
 // ── Body Parsing ──
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ── Static Files ──
 const path = require('path');
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  },
+  express.static(path.join(__dirname, '../uploads'))
+);
 
 // ── HTTP Request Logging ──
 const morganFormat = process.env.NODE_ENV === 'production' ? 'combined' : 'dev';
@@ -72,6 +86,19 @@ app.get('/health', (req, res) => {
 // ── API Routes ──
 const apiPrefix = process.env.API_PREFIX || '/api/v1';
 app.use(apiPrefix, routes);
+
+// ── Frontend Route Redirects (for links accessed via backend port) ──
+app.get('/self-onboarding', (req, res) => {
+  const frontendUrl = env.FRONTEND_URL || env.APP_URL || 'http://localhost:3000';
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  return res.redirect(`${frontendUrl}/self-onboarding${queryString}`);
+});
+
+app.get('/reset-password', (req, res) => {
+  const frontendUrl = env.FRONTEND_URL || env.APP_URL || 'http://localhost:3000';
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  return res.redirect(`${frontendUrl}/reset-password${queryString}`);
+});
 
 // ── 404 Handler ──
 app.use((req, res) => {

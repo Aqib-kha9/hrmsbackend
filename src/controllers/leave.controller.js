@@ -79,12 +79,23 @@ class LeaveController {
   async approveLeaveRequest(req, res, next) {
     try {
       const { id } = req.params;
-      const { action, remarks } = req.body;
+      const { action, remarks, payroll_treatment } = req.body;
       const approvedBy = req.employee.id;
-      const result = await leaveService.approveLeaveRequest(id, action, remarks, approvedBy);
+      const result = await leaveService.approveLeaveRequest(id, action, remarks, approvedBy, payroll_treatment);
       return success(res, `Leave request ${action} successfully`, result, 200);
     } catch (err) {
       logger.error(`Approve leave request error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async getEmployeeLeaveHistory(req, res, next) {
+    try {
+      const { employeeId } = req.params;
+      const result = await leaveService.getEmployeeLeaveHistory(employeeId);
+      return success(res, 'Employee leave history fetched successfully', result, 200);
+    } catch (err) {
+      logger.error(`Get employee leave history error: ${err.message}`);
       return next(err);
     }
   }

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
-const { authorize } = require('../middleware/role.middleware');
+const { requirePermission } = require('../middleware/role.middleware');
 const env = require('../config/env');
 const { SystemSetting } = require('../models');
 
@@ -38,7 +38,7 @@ router.get('/weekend-policy', authenticate, async (req, res) => {
 });
 
 // PUT /api/v1/config/weekend-policy — update weekend policy (admin only)
-router.put('/weekend-policy', authenticate, authorize('admin'), async (req, res) => {
+router.put('/weekend-policy', authenticate, requirePermission('settings:update'), async (req, res) => {
   try {
     const { weekendPolicy } = req.body;
     if (!['sunday_only', 'saturday_sunday'].includes(weekendPolicy)) {
@@ -85,7 +85,7 @@ router.get('/pt-slabs', authenticate, async (req, res) => {
 });
 
 // PUT /api/v1/config/pt-slabs — update PT slabs (admin only)
-router.put('/pt-slabs', authenticate, authorize('admin'), async (req, res) => {
+router.put('/pt-slabs', authenticate, requirePermission('settings:update'), async (req, res) => {
   try {
     const { slabs } = req.body;
     if (!Array.isArray(slabs)) {

@@ -140,6 +140,44 @@ class EmployeeController {
       return next(err);
     }
   }
+
+  // ── Sequential Employee ID (Req 1.2) ──
+  async getNextCode(req, res, next) {
+    try {
+      const prefix = req.query.prefix || 'EMP';
+      const nextCode = await employeeService.getNextEmployeeCode(prefix);
+      return success(res, 'Next sequential employee code generated', { next_emp_code: nextCode, nextCode }, 200);
+    } catch (err) {
+      logger.error(`Get next employee code error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // ── Recently Added Employees (Req 1.1) ──
+  async getRecentlyAdded(req, res, next) {
+    try {
+      const limit = req.query.limit || 6;
+      const employees = await employeeService.getRecentlyAddedEmployees(limit);
+      return success(res, 'Recently added employees retrieved successfully', employees, 200);
+    } catch (err) {
+      logger.error(`Get recently added employees error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // ── Resigned Employee Re-Hiring (Req 23) ──
+  async rehire(req, res, next) {
+    try {
+      const { id } = req.params;
+      const rehireData = req.body;
+      const approvedBy = req.employee.id;
+      const result = await employeeService.rehireEmployee(id, rehireData, approvedBy);
+      return success(res, `Employee ${result.emp_code} re-hired successfully`, result, 200);
+    } catch (err) {
+      logger.error(`Rehire employee error: ${err.message}`);
+      return next(err);
+    }
+  }
 }
 
 module.exports = new EmployeeController();

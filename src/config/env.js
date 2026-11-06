@@ -7,7 +7,9 @@ const env = {
   NODE_ENV: (process.env.NODE_ENV && process.env.NODE_ENV.trim()) || 'development',
   PORT: parseInt(process.env.PORT) || 5000,
   API_PREFIX: process.env.API_PREFIX || '/api/v1',
-  APP_URL: process.env.APP_URL || 'http://localhost:3000',
+  APP_URL: process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
+  FRONTEND_URL: process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000',
+  BACKEND_URL: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT) || 5000}`,
 
   // Database
   DB_HOST: process.env.DB_HOST || 'localhost',

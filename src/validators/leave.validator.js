@@ -1,7 +1,7 @@
 const Joi = require('joi');
 
 const applyLeaveSchema = Joi.object({
-  leave_type: Joi.string().valid('el').default('el'),
+  leave_type: Joi.string().valid('cl', 'el', 'lwp', 'other').default('cl'),
   employee_id: Joi.number().integer().optional().messages({
     'number.base': 'Employee ID must be a valid number',
   }),
@@ -46,13 +46,13 @@ const applyLeaveSchema = Joi.object({
     'date.format': 'End date must be a valid date (YYYY-MM-DD)',
     'any.required': 'End date is required',
   }),
-  duration: Joi.number().integer().min(1).max(30).required().messages({
-    'number.min': 'Duration must be at least 1 day',
+  duration: Joi.number().min(0.5).max(30).required().messages({
+    'number.min': 'Duration must be at least 0.5 days',
     'number.max': 'Duration cannot exceed 30 days',
     'any.required': 'Duration is required',
   }),
-  reason: Joi.string().min(10).max(500).trim().required().messages({
-    'string.min': 'Reason must be at least 10 characters',
+  reason: Joi.string().min(5).max(500).trim().required().messages({
+    'string.min': 'Reason must be at least 5 characters',
     'string.max': 'Reason must be under 500 characters',
     'any.required': 'Reason is required',
   }),
@@ -63,7 +63,8 @@ const approveLeaveSchema = Joi.object({
   action: Joi.string().valid('approved', 'rejected').required().messages({
     'any.required': 'Action (approved/rejected) is required',
   }),
-  remarks: Joi.string().max(500).optional(),
+  remarks: Joi.string().max(500).allow('').optional(),
+  payroll_treatment: Joi.string().valid('paid', 'unpaid', 'adjusted_balance', 'deducted_current', 'carry_forward_next').optional(),
 });
 
 const grantLeaveSchema = Joi.object({

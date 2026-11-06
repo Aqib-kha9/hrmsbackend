@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth.middleware');
-const { authorize } = require('../middleware/role.middleware');
+const { requirePermission } = require('../middleware/role.middleware');
 const signatoryController = require('../controllers/signatory.controller');
 
 // Multer setup using memory storage for local upload
@@ -28,8 +28,8 @@ router.use(authenticate);
 router.get('/', signatoryController.getAllSignatories);
 
 // Only admins or HR can manage signatories
-router.post('/', authorize('admin', 'hr'), upload.single('signature'), signatoryController.createSignatory);
-router.put('/:id', authorize('admin', 'hr'), upload.single('signature'), signatoryController.updateSignatory);
-router.delete('/:id', authorize('admin', 'hr'), signatoryController.deleteSignatory);
+router.post('/', requirePermission('settings:create'), upload.single('signature'), signatoryController.createSignatory);
+router.put('/:id', requirePermission('settings:update'), upload.single('signature'), signatoryController.updateSignatory);
+router.delete('/:id', requirePermission('settings:delete'), signatoryController.deleteSignatory);
 
 module.exports = router;

@@ -38,8 +38,16 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(80),
     allowNull: true,
   },
+  role_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: {
+      model: 'roles',
+      key: 'id',
+    },
+  },
   role: {
-    type: DataTypes.ENUM('admin', 'hr', 'manager', 'employee'),
+    type: DataTypes.STRING(50),
     defaultValue: 'employee',
     allowNull: false,
   },
@@ -153,6 +161,11 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(10),
     allowNull: true,
     comment: 'Permanent Account Number',
+  },
+  aadhaar_number: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    comment: '12-digit Aadhaar Card Number',
   },
   pf_number: {
     type: DataTypes.STRING(30),

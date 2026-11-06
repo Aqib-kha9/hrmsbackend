@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 360" width="100%" height="100%" style="background:#fefefe;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);font-family:system-ui,-apple-system,sans-serif;">
+  <rect x="2" y="2" width="696" height="356" rx="16" fill="none" stroke="#cbd5e1" stroke-width="2"/>
+
+  <!-- Bank Top Bar -->
+  <rect x="0" y="0" width="700" height="60" rx="16" fill="#004c8f"/>
+  <text x="30" y="38" font-size="20" font-weight="900" fill="#ffffff">HDFC BANK</text>
+  <text x="670" y="38" text-anchor="end" font-size="13" font-weight="bold" fill="#93c5fd">IFSC: KJDKFJKD98H</text>
+
+  <!-- Cheque Body -->
+  <text x="30" y="100" font-size="12" font-weight="bold" fill="#64748b">PAYEE NAME / धारक:</text>
+  <text x="170" y="100" font-size="18" font-weight="900" fill="#0f172a">AQIB KHAN</text>
+  <line x1="165" y1="108" x2="670" y2="108" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <text x="30" y="145" font-size="12" font-weight="bold" fill="#64748b">BANK A/C NUMBER:</text>
+  <rect x="170" y="125" width="280" height="34" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="185" y="148" font-size="18" font-weight="900" fill="#0f172a" letter-spacing="2">89838989989</text>
+
+  <text x="30" y="195" font-size="12" font-weight="bold" fill="#64748b">BRANCH ADDRESS:</text>
+  <text x="170" y="195" font-size="13" fill="#334155">Soniya Vihar Branch, Delhi 110094</text>
+
+  <!-- Big CANCELLED Watermark -->
+  <g transform="rotate(-18 350 180)">
+    <line x1="80" y1="150" x2="620" y2="150" stroke="#dc2626" stroke-width="8" opacity="0.45"/>
+    <text x="350" y="190" text-anchor="middle" font-size="52" font-weight="900" fill="#dc2626" opacity="0.45" letter-spacing="10">CANCELLED</text>
+    <line x1="80" y1="210" x2="620" y2="210" stroke="#dc2626" stroke-width="8" opacity="0.45"/>
+  </g>
+
+  <!-- Cheque MICR Strip -->
+  <rect x="0" y="300" width="700" height="60" fill="#f8fafc"/>
+  <line x1="0" y1="300" x2="700" y2="300" stroke="#cbd5e1"/>
+  <text x="350" y="338" text-anchor="middle" font-size="16" font-family="monospace" font-weight="bold" fill="#475569">⑆000240⑆ 110240054⑆ 89838989989⑈ 29</text>
+</svg>

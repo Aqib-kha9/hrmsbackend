@@ -28,9 +28,22 @@ const Tour = require('./tour.model');
 const Holiday = require('./holiday.model');
 const SystemSetting = require('./system_setting.model');
 const AuthorisedSignatory = require('./authorised_signatory.model');
-
+const Role = require('./role.model');
+const Permission = require('./permission.model');
+const RolePermission = require('./role_permission.model');
 
 // ── Define Associations ──
+
+// RBAC Associations
+Role.belongsToMany(Permission, { through: RolePermission, foreignKey: 'role_id', as: 'permissions' });
+Permission.belongsToMany(Role, { through: RolePermission, foreignKey: 'permission_id', as: 'roles' });
+Role.hasMany(RolePermission, { foreignKey: 'role_id', as: 'rolePermissions' });
+RolePermission.belongsTo(Role, { foreignKey: 'role_id', as: 'role' });
+Permission.hasMany(RolePermission, { foreignKey: 'permission_id', as: 'permissionRoles' });
+RolePermission.belongsTo(Permission, { foreignKey: 'permission_id', as: 'permission' });
+
+Employee.belongsTo(Role, { foreignKey: 'role_id', as: 'roleDetails' });
+Role.hasMany(Employee, { foreignKey: 'role_id', as: 'employees' });
 
 // Employee → Office (works at)
 Employee.belongsTo(Office, { foreignKey: 'office_id', as: 'office' });
@@ -48,6 +61,7 @@ Employee.hasMany(AttendanceRecord, { foreignKey: 'employee_id', as: 'attendanceR
 AttendanceRecord.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
 AttendanceRecord.belongsTo(Office, { foreignKey: 'punch_in_office_id', as: 'punchInOffice' });
 AttendanceRecord.belongsTo(Office, { foreignKey: 'punch_out_office_id', as: 'punchOutOffice' });
+AttendanceRecord.belongsTo(Employee, { foreignKey: 'marked_by_id', as: 'markedBy' });
 Office.hasMany(AttendanceRecord, { foreignKey: 'punch_in_office_id', as: 'punchInRecords' });
 Office.hasMany(AttendanceRecord, { foreignKey: 'punch_out_office_id', as: 'punchOutRecords' });
 
@@ -146,6 +160,16 @@ Employee.hasMany(Tour, { foreignKey: 'created_by', as: 'createdTours' });
 // Tour → Employee (canceller)
 Tour.belongsTo(Employee, { foreignKey: 'cancelled_by', as: 'canceller' });
 
+// OnboardingInvitation associations
+const OnboardingInvitation = require('./onboarding_invitation.model');
+OnboardingInvitation.belongsTo(Office, { foreignKey: 'office_id', as: 'office' });
+OnboardingInvitation.belongsTo(Company, { foreignKey: 'company_id', as: 'company' });
+OnboardingInvitation.belongsTo(Employee, { foreignKey: 'created_by', as: 'creator' });
+OnboardingInvitation.belongsTo(Employee, { foreignKey: 'approved_by', as: 'approver' });
+
+// Letter → AuthorisedSignatory
+Letter.belongsTo(AuthorisedSignatory, { foreignKey: 'signatory_id', as: 'signatory' });
+
 module.exports = {
   sequelize,
   Employee,
@@ -175,4 +199,8 @@ module.exports = {
   Holiday,
   SystemSetting,
   AuthorisedSignatory,
+  OnboardingInvitation,
+  Role,
+  Permission,
+  RolePermission,
 };

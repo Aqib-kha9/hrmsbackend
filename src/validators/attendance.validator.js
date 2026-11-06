@@ -5,17 +5,28 @@ const punchInSchema = Joi.object({
   longitude: Joi.number().min(-180).max(180).required(),
   office_id: Joi.number().integer().optional(),
   photo_path: Joi.string().optional(),
+  is_outdoor: Joi.boolean().optional(),
+  is_field_duty: Joi.boolean().optional(),
+  remarks: Joi.string().allow('', null).optional(),
+  reason: Joi.string().allow('', null).optional(),
+  check_in_method: Joi.string().optional(),
 });
 
 const punchOutSchema = Joi.object({
   latitude: Joi.number().min(-90).max(90).required(),
   longitude: Joi.number().min(-180).max(180).required(),
   photo_path: Joi.string().optional(),
+  is_outdoor: Joi.boolean().optional(),
+  is_field_duty: Joi.boolean().optional(),
+  remarks: Joi.string().allow('', null).optional(),
+  reason: Joi.string().allow('', null).optional(),
+  check_in_method: Joi.string().optional(),
 });
 
 const monthlyQuerySchema = Joi.object({
   month: Joi.number().integer().min(1).max(12).optional(),
   year: Joi.number().integer().min(2020).max(2030).optional(),
+  cycle_type: Joi.string().valid('payroll', 'calendar').optional(),
 });
 
 const adminLiveQuerySchema = Joi.object({
@@ -48,12 +59,15 @@ const adminMonthlyQuerySchema = Joi.object({
   month: Joi.number().integer().min(1).max(12).optional(),
   year: Joi.number().integer().min(2020).max(2030).optional(),
   department: Joi.string().allow('', null).optional(),
+  cycle_type: Joi.string().valid('payroll', 'calendar').optional(),
 });
 
 const manualEntrySchema = Joi.object({
-  employeeId: Joi.string().trim().required()
+  employeeId: Joi.alternatives().try(
+    Joi.string().trim(),
+    Joi.number().integer().positive()
+  ).required()
     .messages({
-      'string.empty': 'Employee ID is required',
       'any.required': 'Employee ID is required',
     }),
   date: Joi.date().iso().required()
@@ -67,6 +81,9 @@ const manualEntrySchema = Joi.object({
       'any.required': 'Status is required',
     }),
   reason: Joi.string().allow('', null).max(500).optional(),
+  is_outdoor: Joi.boolean().optional(),
+  check_in_time: Joi.string().optional(),
+  check_out_time: Joi.string().optional(),
 });
 
 // ── Tour management schemas ──

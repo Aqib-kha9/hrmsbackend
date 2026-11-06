@@ -10,7 +10,15 @@ const payslipQuerySchema = Joi.object({
 
 // ── Ledger schemas ──
 const updateEntrySchema = Joi.object({
-  absent_days: Joi.number().integer().min(0).max(31).optional(),
+  absent_days: Joi.number().min(0).max(31).optional(),
+  leave_adjustment_days: Joi.number().optional(),
+  leave_carry_forward_days: Joi.number().min(0).optional(),
+  manual_payable_days: Joi.number().min(0).max(31).allow(null).optional(),
+  admin_notes: Joi.string().max(1000).allow('', null).optional(),
+  present_days: Joi.number().min(0).max(31).optional(),
+  paid_leave_days: Joi.number().min(0).max(31).optional(),
+  lwp_days: Joi.number().min(0).max(31).optional(),
+  total_muster_days: Joi.number().integer().min(1).max(31).optional(),
   bonus: Joi.number().min(0).optional(),
   previous_arrears: Joi.number().min(0).optional(),
   incentive: Joi.number().min(0).optional(),

@@ -13,9 +13,9 @@ const LeaveRequest = sequelize.define('LeaveRequest', {
     references: { model: 'employees', key: 'id' },
   },
   leave_type: {
-    type: DataTypes.ENUM('el'),
-    defaultValue: 'el',
-    comment: 'Only Earned Leave (EL) — single leave type system',
+    type: DataTypes.ENUM('cl', 'el', 'lwp', 'other'),
+    defaultValue: 'cl',
+    comment: 'cl = Casual Leave (12/yr), el = Earned Leave (12/yr), lwp = Leave Without Pay, other = Other',
   },
   from_date: {
     type: DataTypes.DATEONLY,
@@ -26,9 +26,9 @@ const LeaveRequest = sequelize.define('LeaveRequest', {
     allowNull: false,
   },
   duration: {
-    type: DataTypes.INTEGER,
-    defaultValue: 1,
-    comment: 'Number of leave days',
+    type: DataTypes.DECIMAL(4, 1),
+    defaultValue: 1.0,
+    comment: 'Number of leave days (supports 0.5 for half day)',
   },
   reason: {
     type: DataTypes.TEXT,
@@ -56,11 +56,29 @@ const LeaveRequest = sequelize.define('LeaveRequest', {
     allowNull: true,
     comment: 'Remarks by approver',
   },
+  // ── Manual Payroll Control & Decoupling (Req 4.3 & 10) ──
+  is_paid: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    comment: 'Whether this leave is paid or loss of pay',
+  },
+  payroll_treatment: {
+    type: DataTypes.ENUM('pending', 'paid', 'unpaid', 'adjusted_balance', 'deducted_current', 'carry_forward_next'),
+    defaultValue: 'pending',
+    comment: 'Admin payroll control: how this leave was treated in payroll',
+  },
+  payroll_adjusted_month: {
+    type: DataTypes.STRING(7),
+    allowNull: true,
+    comment: 'YYYY-MM when this leave was adjusted/deducted in payroll',
+  },
 }, {
   tableName: 'leave_requests',
+  timestamps: true,
   indexes: [
     { fields: ['employee_id'] },
     { fields: ['status'] },
+    { fields: ['leave_type'] },
     { fields: ['from_date', 'to_date'] },
   ],
 });

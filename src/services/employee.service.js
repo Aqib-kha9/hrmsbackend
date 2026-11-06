@@ -30,7 +30,13 @@ class EmployeeService {
     } else {
       whereClause.role = { [Op.ne]: 'admin' };
     }
-    if (status) whereClause.status = status;
+    if (status) {
+      if (typeof status === 'string' && status.includes(',')) {
+        whereClause.status = { [Op.in]: status.split(',').map((s) => s.trim()) };
+      } else {
+        whereClause.status = status;
+      }
+    }
     if (company_id) whereClause.company_id = company_id;
     if (office_id) whereClause.office_id = office_id;
 
@@ -105,16 +111,29 @@ class EmployeeService {
     return employee;
   }
 
-  async updateEmployeeRole(employeeId, role) {
-    if (!Object.values(ROLES).includes(role)) {
-      throw new AppError(`Invalid role. Valid roles: ${Object.values(ROLES).join(', ')}`, 400);
-    }
-
+  async updateEmployeeRole(employeeId, roleIdentifier) {
+    const { Role } = require('../models');
     const employee = await Employee.findByPk(employeeId);
     if (!employee) throw new AppError('Employee not found', 404);
 
-    await employee.update({ role });
-    logger.info(`Employee ${employee.emp_code} role changed to ${role}`);
+    let targetRole;
+    if (typeof roleIdentifier === 'number' || !isNaN(Number(roleIdentifier))) {
+      targetRole = await Role.findByPk(roleIdentifier);
+    } else {
+      const normalized = (roleIdentifier || '').toUpperCase().replace(/\s+/g, '_');
+      targetRole = await Role.findOne({ where: { name: normalized } });
+    }
+
+    if (targetRole) {
+      await employee.update({
+        role_id: targetRole.id,
+        role: targetRole.name.toLowerCase(),
+      });
+    } else {
+      await employee.update({ role: String(roleIdentifier).toLowerCase() });
+    }
+
+    logger.info(`Employee ${employee.emp_code} role changed to ${roleIdentifier}`);
     return employee;
   }
 
@@ -338,6 +357,120 @@ class EmployeeService {
       name: employee.name,
       new_password: newPassword,
     };
+  }
+
+  /**
+   * Automatic Sequential Employee ID Generator (Req 1.2)
+   * Follows sequential numbering system (e.g. EMP456 → EMP457 → EMP458).
+   * Guarantees no duplicate or inconsistent codes across all modules.
+   */
+  async getNextEmployeeCode(prefix = 'EMP') {
+    const employees = await Employee.findAll({
+      attributes: ['emp_code'],
+      raw: true,
+    });
+
+    let maxNum = 0;
+    const prefixRegex = new RegExp(`^${prefix}(\\d+)$`, 'i');
+
+    for (const emp of employees) {
+      if (!emp.emp_code) continue;
+      const match = emp.emp_code.match(prefixRegex);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+
+    const nextNum = maxNum > 0 ? maxNum + 1 : 101; // default start at EMP101 if fresh
+    const padded = String(nextNum).padStart(3, '0');
+    return `${prefix}${padded}`;
+  }
+
+  /**
+   * Recently Added Employees (Req 1.1)
+   * Allows administrators to quickly identify and access recently onboarded employees.
+   */
+  async getRecentlyAddedEmployees(limit = 6) {
+    const employees = await Employee.findAll({
+      where: {
+        role: { [Op.ne]: 'admin' },
+      },
+      attributes: { exclude: ['password', 'refresh_token', 'reset_password_token'] },
+      include: ['office', 'company'],
+      order: [
+        ['created_at', 'DESC'],
+        ['date_of_joining', 'DESC'],
+      ],
+      limit: Math.min(20, Math.max(1, parseInt(limit) || 6)),
+    });
+
+    return employees;
+  }
+
+  /**
+   * Resigned Employee Re-Hiring Workflow (Req 23)
+   * Re-onboards a resigned employee cleanly while preserving historical records.
+   */
+  async rehireEmployee(employeeId, rehireData, approvedBy) {
+    const employee = await Employee.findByPk(employeeId);
+    if (!employee) throw new AppError('Employee not found', 404);
+
+    if (employee.status !== 'resigned' && employee.status !== 'inactive') {
+      throw new AppError(`Cannot re-hire employee with status "${employee.status}". Must be resigned or inactive.`, 400);
+    }
+
+    const newGross = Number(rehireData.fixed_gross) || Number(employee.fixed_gross) || 0;
+    const newBasic = Math.round(newGross * 0.40);
+    const newDoj = rehireData.date_of_joining || new Date().toISOString().split('T')[0];
+
+    const t = await sequelize.transaction();
+    try {
+      await employee.update({
+        status: 'active',
+        designation: rehireData.designation || employee.designation,
+        department: rehireData.department || employee.department,
+        office_id: rehireData.office_id || employee.office_id,
+        company_id: rehireData.company_id || employee.company_id,
+        date_of_joining: newDoj,
+        fixed_gross: newGross,
+        basic_salary: newBasic,
+      }, { transaction: t });
+
+      if (newGross > 0) {
+        await SalaryStructure.create({
+          employee_id: employee.id,
+          fixed_gross: newGross,
+          basic_salary: newBasic,
+          hra: Math.round(newBasic * 0.40),
+          other_allowance: newGross - newBasic - Math.round(newBasic * 0.40),
+          effective_from: newDoj,
+          created_by: approvedBy,
+          updated_by: approvedBy,
+        }, { transaction: t });
+
+        await SalaryRevision.create({
+          employee_id: employee.id,
+          previous_gross: employee.fixed_gross,
+          new_gross: newGross,
+          previous_basic: employee.basic_salary,
+          new_basic: newBasic,
+          revision_type: SALARY_REVISION_TYPES.INITIAL || 'initial',
+          effective_date: newDoj,
+          remarks: `Re-hired on ${newDoj}`,
+          approved_by: approvedBy,
+        }, { transaction: t });
+      }
+
+      await t.commit();
+      logger.info(`Resigned employee ${employee.emp_code} (${employee.name}) successfully re-hired`);
+      return employee;
+    } catch (err) {
+      await t.rollback();
+      throw err;
+    }
   }
 }
 

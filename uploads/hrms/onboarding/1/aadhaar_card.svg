@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 420" width="100%" height="100%" style="background:#fff;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);font-family:system-ui,-apple-system,sans-serif;">
+  <defs>
+    <linearGradient id="flag" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FF9933"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#138808"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Top Flag Stripe -->
+  <rect x="0" y="0" width="650" height="14" fill="#FF9933"/>
+  <rect x="0" y="14" width="650" height="14" fill="#FFFFFF"/>
+  <rect x="0" y="28" width="650" height="14" fill="#138808"/>
+
+  <!-- Card Border -->
+  <rect x="2" y="2" width="646" height="416" rx="16" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+
+  <!-- Header -->
+  <text x="325" y="75" text-anchor="middle" font-size="16" font-weight="bold" fill="#1e293b">भारत सरकार / GOVERNMENT OF INDIA</text>
+  <text x="325" y="95" text-anchor="middle" font-size="12" fill="#64748b">Unique Identification Authority of India</text>
+
+  <!-- Candidate Photo Box -->
+  <rect x="40" y="125" width="130" height="160" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="105" cy="180" r="35" fill="#94a3b8"/>
+  <path d="M 65 260 C 65 220, 145 220, 145 260 Z" fill="#94a3b8"/>
+  <text x="105" y="275" text-anchor="middle" font-size="11" font-weight="bold" fill="#475569">Aqib khan</text>
+
+  <!-- Details -->
+  <text x="195" y="150" font-size="13" font-weight="bold" fill="#334155">नाम / Name:</text>
+  <text x="300" y="150" font-size="15" font-weight="bold" fill="#0f172a">Aqib khan</text>
+
+  <text x="195" y="185" font-size="13" font-weight="bold" fill="#334155">जन्म तिथि / DOB:</text>
+  <text x="300" y="185" font-size="14" fill="#1e293b">02/11/2026</text>
+
+  <text x="195" y="220" font-size="13" font-weight="bold" fill="#334155">लिंग / Gender:</text>
+  <text x="300" y="220" font-size="14" fill="#1e293b">Male / पुरुष</text>
+
+  <text x="195" y="255" font-size="13" font-weight="bold" fill="#334155">पता / Address:</text>
+  <text x="300" y="255" font-size="12" fill="#475569">Soniya Vihar Pusta 3rd,</text>
+  <text x="300" y="275" font-size="12" fill="#475569">Delhi - 110094</text>
+
+  <!-- QR Code Mock -->
+  <rect x="495" y="130" width="115" height="115" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <rect x="505" y="140" width="30" height="30" fill="#1e293b"/>
+  <rect x="565" y="140" width="35" height="35" fill="#1e293b"/>
+  <rect x="505" y="195" width="35" height="35" fill="#1e293b"/>
+  <rect x="555" y="190" width="20" height="20" fill="#1e293b"/>
+  <text x="552" y="260" text-anchor="middle" font-size="10" font-weight="bold" fill="#64748b">SECURE QR</text>
+
+  <!-- Red Line Divider -->
+  <line x1="30" y1="315" x2="620" y2="315" stroke="#dc2626" stroke-width="2.5"/>
+
+  <!-- Aadhaar Number -->
+  <text x="325" y="355" text-anchor="middle" font-size="24" font-weight="900" fill="#b91c1c" letter-spacing="4">9898 9389 4832</text>
+  <text x="325" y="385" text-anchor="middle" font-size="12" font-weight="bold" fill="#64748b">मेरा आधार, मेरी पहचान</text>
+</svg>

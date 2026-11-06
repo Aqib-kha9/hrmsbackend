@@ -75,9 +75,20 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
     comment: 'Distance from office at check-out (meters)',
   },
   check_in_method: {
-    type: DataTypes.ENUM('biometric', 'gps', 'manual', 'qr_code', 'web'),
+    type: DataTypes.STRING(50),
     defaultValue: 'web',
-    comment: 'Method used for check-in',
+    comment: 'Method used for check-in (web, mobile, gps, biometric, outdoor, admin)',
+  },
+  is_outdoor: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether attendance is outdoor/field duty',
+  },
+  marked_by_id: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'employees', key: 'id' },
+    comment: 'Authorized admin/manager who marked on behalf',
   },
   check_in_photo: {
     type: DataTypes.STRING(500),

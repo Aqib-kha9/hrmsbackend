@@ -13,6 +13,22 @@ const TIMEZONE = process.env.TIMEZONE || 'Asia/Kolkata';
 const LATE_GRACE_MINUTES = parseInt(process.env.LATE_GRACE_MINUTES || '10', 10) || 0;
 
 /**
+ * Returns configurable late threshold minutes (e.g. 60 min / 1 hr) from SystemSetting or env.
+ */
+async function _getLateThresholdMinutes() {
+  try {
+    const setting = await SystemSetting.findByPk('late_threshold_minutes');
+    if (setting && setting.value) {
+      const val = parseInt(setting.value, 10);
+      if (!isNaN(val)) return val;
+    }
+  } catch (e) {
+    logger.error(`Failed to read late threshold setting: ${e.message}`);
+  }
+  return parseInt(process.env.LATE_GRACE_MINUTES || '60', 10) || 60;
+}
+
+/**
  * Returns the set of JS day-of-week numbers that are weekends based on the
  * stored weekend policy.
  * 'sunday_only'      → [0]          (Sunday)
@@ -170,7 +186,7 @@ function _formatRecordTime(time, dateStr, timeZone = TIMEZONE) {
 }
 
 class AttendanceService {
-  async punchIn(employeeId, latitude, longitude) {
+  async punchIn(employeeId, latitude, longitude, outdoorData = {}) {
     const today = new Date();
     const dateStr = getLocalDateString(today);
 
@@ -202,59 +218,66 @@ class AttendanceService {
       throw new AppError('Employee profile not found', 400);
     }
 
+    const isOutdoor = Boolean(
+      outdoorData.is_outdoor ||
+      outdoorData.is_field_duty ||
+      outdoorData.check_in_method === 'outdoor'
+    );
+
     // Get all active offices for this company
     const offices = await Office.findAll({
       where: { company_id: employee.company_id, is_active: true }
     });
 
-    console.log(`[GEO-FENCE DEBUG] PunchIn request from employee ${employeeId}. Coordinates: lat=${latitude}, lon=${longitude}`);
-    console.log(`[GEO-FENCE DEBUG] Employee company_id=${employee.company_id}, office_id=${employee.office_id}`);
-    console.log(`[GEO-FENCE DEBUG] Total offices fetched: ${offices.length}`);
-
     let matchingOffice = null;
-    let minDistance = null;
-    let primaryDistance = null;
+    let distance = 0;
 
-    for (const office of offices) {
-      const dist = this._calculateDistance(
-        latitude, longitude,
-        office.latitude, office.longitude
-      );
+    if (isOutdoor) {
+      matchingOffice = offices.find(o => o.id === employee.office_id) || offices[0] || null;
+      distance = 0;
+      logger.info(`[OUTDOOR PUNCH-IN] Employee ${employee.emp_code} (${employeeId}) marked outdoor attendance.`);
+    } else {
+      let minDistance = null;
+      let primaryDistance = null;
 
-      console.log(`[GEO-FENCE DEBUG] Checking office: "${office.name}" (ID: ${office.id}) coordinates: lat=${office.latitude}, lon=${office.longitude}, radius=${office.radius_meters}m. Calculated distance: ${dist}m`);
+      for (const office of offices) {
+        const dist = this._calculateDistance(
+          latitude, longitude,
+          office.latitude, office.longitude
+        );
 
-      if (employee.office_id === office.id) {
-        primaryDistance = dist;
+        if (employee.office_id === office.id) {
+          primaryDistance = dist;
+          if (dist <= office.radius_meters) {
+            matchingOffice = office;
+            minDistance = dist;
+            break;
+          }
+        }
+
         if (dist <= office.radius_meters) {
-          matchingOffice = office;
-          minDistance = dist;
-          break; // Primary office matched, stop searching
+          if (matchingOffice === null || dist < minDistance) {
+            matchingOffice = office;
+            minDistance = dist;
+          }
         }
       }
 
-      // If we haven't matched the primary office, find the closest valid one
-      if (dist <= office.radius_meters) {
-        if (matchingOffice === null || dist < minDistance) {
-          matchingOffice = office;
-          minDistance = dist;
-        }
+      if (!matchingOffice) {
+        const primaryLocName = employee.office?.name || 'Primary Office';
+        const detailMsg = primaryDistance !== null 
+          ? `outside ${primaryLocName} by ${Math.round(primaryDistance - (employee.office?.radius_meters || 200))}m`
+          : 'outside any company office geofence';
+        throw new AppError(`You are outside all registered office perimeters (${detailMsg}).`, 403);
       }
-    }
 
-    if (!matchingOffice) {
-      const primaryLocName = employee.office?.name || 'Primary Office';
-      const detailMsg = primaryDistance !== null 
-        ? `outside ${primaryLocName} by ${Math.round(primaryDistance - (employee.office?.radius_meters || 200))}m`
-        : 'outside any company office geofence';
-      throw new AppError(`You are outside all registered office perimeters (${detailMsg}).`, 403);
+      distance = minDistance;
     }
-
-    const distance = minDistance;
 
     // Determine status and late arrival using shift_start_time (default 10:00 AM = 600 mins)
     const localCheckInMins = getLocalMinutesFromMidnight(today);
-    const shiftStartMins = timeStringToMinutes(employee.shift_start_time, 600); // default 10:00 AM = 600 mins
-    const shiftEndMins = timeStringToMinutes(employee.shift_end_time, 1140); // default 7:00 PM = 1140 mins
+    const shiftStartMins = timeStringToMinutes(employee.shift_start_time, 600);
+    const shiftEndMins = timeStringToMinutes(employee.shift_end_time, 1140);
 
     // Enforce allowed punch-in window (2 hours before shift start until shift end)
     const allowedStart = shiftStartMins - 120;
@@ -267,10 +290,8 @@ class AttendanceService {
 
     let isWithinWindow = false;
     if (allowedEnd < normStart) {
-      // Midnight-crossing shift
       isWithinWindow = (localCheckInMins >= normStart) || (localCheckInMins <= allowedEnd);
     } else {
-      // Normal shift
       isWithinWindow = (localCheckInMins >= normStart) && (localCheckInMins <= allowedEnd);
     }
 
@@ -282,26 +303,28 @@ class AttendanceService {
       throw new AppError(`Punch in is only allowed during shift hours (from ${_formatTime(employee.shift_start_time || '10:00:00')} to ${_formatTime(employee.shift_end_time || '19:00:00')} with 2 hours early buffer).`, 403);
     }
 
-    // Determine late minutes (respect LATE_GRACE_MINUTES buffer)
+    // Determine late minutes (respect configurable late threshold buffer - default 60 mins)
+    const lateThreshold = await _getLateThresholdMinutes();
     let lateByMinutes = 0;
     if (shiftEndMins < shiftStartMins) {
-      // Midnight-crossing shift
       if (localCheckInMins >= shiftStartMins) {
         lateByMinutes = localCheckInMins - shiftStartMins;
       } else if (localCheckInMins <= shiftEndMins) {
         lateByMinutes = (1440 - shiftStartMins) + localCheckInMins;
       }
     } else {
-      // Normal shift
       if (localCheckInMins > shiftStartMins) {
         lateByMinutes = localCheckInMins - shiftStartMins;
       }
     }
-    const isLate = lateByMinutes > LATE_GRACE_MINUTES;
+    const isLate = lateByMinutes > lateThreshold;
     if (!isLate) {
       lateByMinutes = 0;
     }
     const status = isLate ? 'late' : 'present';
+
+    const checkInMethod = isOutdoor ? 'outdoor' : (outdoorData.check_in_method || 'web');
+    const remarks = outdoorData.remarks || outdoorData.reason || (isOutdoor ? 'Outdoor / Field duty check-in' : null);
 
     const record = await AttendanceRecord.create({
       employee_id: employeeId,
@@ -312,11 +335,13 @@ class AttendanceService {
       late_by_minutes: lateByMinutes,
       check_in_latitude: latitude,
       check_in_longitude: longitude,
-      check_in_method: 'web',
-      punch_in_office_id: matchingOffice.id,
+      check_in_method: checkInMethod,
+      is_outdoor: isOutdoor,
+      remarks,
+      punch_in_office_id: matchingOffice ? matchingOffice.id : null,
     });
 
-    logger.info(`Employee ${employee.emp_code} punched in at ${today.toISOString()} at branch ${matchingOffice.name}`);
+    logger.info(`Employee ${employee.emp_code} punched in (${checkInMethod}) at ${today.toISOString()}`);
 
     return {
       id: record.id,
@@ -325,10 +350,12 @@ class AttendanceService {
       status: record.status,
       late_by_minutes: record.late_by_minutes,
       distance: Math.round(distance),
+      is_outdoor: record.is_outdoor,
+      remarks: record.remarks,
     };
   }
 
-  async punchOut(employeeId, latitude, longitude) {
+  async punchOut(employeeId, latitude, longitude, outdoorData = {}) {
     const today = new Date();
     const dateStr = getLocalDateString(today);
 
@@ -344,58 +371,66 @@ class AttendanceService {
       throw new AppError('Already punched out today', 400);
     }
 
-    // Geo-fence check for punch out
     const employee = await Employee.findByPk(employeeId, { include: ['office'] });
     if (!employee) {
       throw new AppError('Employee profile not found', 400);
     }
+
+    const isOutdoor = Boolean(
+      record.is_outdoor ||
+      record.check_in_method === 'outdoor' ||
+      outdoorData.is_outdoor ||
+      outdoorData.is_field_duty ||
+      outdoorData.check_in_method === 'outdoor'
+    );
+
     const offices = await Office.findAll({
       where: { company_id: employee.company_id, is_active: true }
     });
 
-    console.log(`[GEO-FENCE DEBUG] PunchOut request from employee ${employeeId}. Coordinates: lat=${latitude}, lon=${longitude}`);
-    console.log(`[GEO-FENCE DEBUG] Employee company_id=${employee.company_id}, office_id=${employee.office_id}`);
-    console.log(`[GEO-FENCE DEBUG] Total offices fetched: ${offices.length}`);
-
     let matchingOffice = null;
-    let minDistance = null;
-    let primaryDistance = null;
+    let distance = 0;
 
-    for (const office of offices) {
-      const dist = this._calculateDistance(
-        latitude, longitude,
-        office.latitude, office.longitude
-      );
+    if (isOutdoor) {
+      matchingOffice = offices.find(o => o.id === employee.office_id) || offices[0] || null;
+      distance = 0;
+    } else {
+      let minDistance = null;
+      let primaryDistance = null;
 
-      console.log(`[GEO-FENCE DEBUG] Checking office: "${office.name}" (ID: ${office.id}) coordinates: lat=${office.latitude}, lon=${office.longitude}, radius=${office.radius_meters}m. Calculated distance: ${dist}m`);
+      for (const office of offices) {
+        const dist = this._calculateDistance(
+          latitude, longitude,
+          office.latitude, office.longitude
+        );
 
-      if (employee.office_id === office.id) {
-        primaryDistance = dist;
+        if (employee.office_id === office.id) {
+          primaryDistance = dist;
+          if (dist <= office.radius_meters) {
+            matchingOffice = office;
+            minDistance = dist;
+            break;
+          }
+        }
+
         if (dist <= office.radius_meters) {
-          matchingOffice = office;
-          minDistance = dist;
-          break; // Primary office matched, stop searching
+          if (matchingOffice === null || dist < minDistance) {
+            matchingOffice = office;
+            minDistance = dist;
+          }
         }
       }
 
-      // If we haven't matched the primary office, find the closest valid one
-      if (dist <= office.radius_meters) {
-        if (matchingOffice === null || dist < minDistance) {
-          matchingOffice = office;
-          minDistance = dist;
-        }
+      if (!matchingOffice) {
+        const primaryLocName = employee.office?.name || 'Primary Office';
+        const detailMsg = primaryDistance !== null 
+          ? `outside ${primaryLocName} by ${Math.round(primaryDistance - (employee.office?.radius_meters || 200))}m`
+          : 'outside any company office geofence';
+        throw new AppError(`You are outside all registered office perimeters (${detailMsg}).`, 403);
       }
-    }
 
-    if (!matchingOffice) {
-      const primaryLocName = employee.office?.name || 'Primary Office';
-      const detailMsg = primaryDistance !== null 
-        ? `outside ${primaryLocName} by ${Math.round(primaryDistance - (employee.office?.radius_meters || 200))}m`
-        : 'outside any company office geofence';
-      throw new AppError(`You are outside all registered office perimeters (${detailMsg}).`, 403);
+      distance = minDistance;
     }
-
-    const distance = minDistance;
 
     let checkInTime = null;
     if (typeof record.check_in_time === 'string') {
@@ -409,34 +444,28 @@ class AttendanceService {
       checkInTime = new Date(record.check_in_time);
     }
     const totalMinutes = Math.floor((today - checkInTime) / 60000);
-    const totalHours = totalMinutes > 0 ? (totalMinutes / 60) : 0; // use decimal hours matching DECIMAL(4,2)
-    const remainingMinutes = totalMinutes % 60;
+    const totalHours = totalMinutes > 0 ? (totalMinutes / 60) : 0;
 
     // Check for early exit and overtime using shift_end_time
     const localCheckOutMins = getLocalMinutesFromMidnight(today);
-    const shiftEndMins = timeStringToMinutes(employee ? employee.shift_end_time : null, 1140); // default 7:00 PM = 1140 mins
-    const shiftStartMins = timeStringToMinutes(employee ? employee.shift_start_time : null, 600); // default 10:00 AM = 600 mins
+    const shiftEndMins = timeStringToMinutes(employee ? employee.shift_end_time : null, 1140);
+    const shiftStartMins = timeStringToMinutes(employee ? employee.shift_start_time : null, 600);
 
     let isEarlyExit = false;
     let earlyExitMinutes = 0;
     let overtimeMinutes = 0;
 
     if (shiftEndMins < shiftStartMins) {
-      // Midnight-crossing shift
       if (localCheckOutMins >= shiftStartMins) {
-        // Punched out before midnight -> early exit
         isEarlyExit = true;
         earlyExitMinutes = (1440 - localCheckOutMins) + shiftEndMins;
       } else if (localCheckOutMins < shiftEndMins) {
-        // Punched out after midnight but before shift end -> early exit
         isEarlyExit = true;
         earlyExitMinutes = shiftEndMins - localCheckOutMins;
       } else {
-        // Punched out after shiftEndMins (overtime)
         overtimeMinutes = localCheckOutMins - shiftEndMins;
       }
     } else {
-      // Normal shift
       if (localCheckOutMins < shiftEndMins) {
         isEarlyExit = true;
         earlyExitMinutes = shiftEndMins - localCheckOutMins;
@@ -445,10 +474,14 @@ class AttendanceService {
       }
     }
 
-    // Update status if half day
     let status = record.status;
-    if (totalMinutes < 240) { // Less than 4 hours = half day
+    if (totalMinutes < 240) {
       status = 'half_day';
+    }
+
+    let updatedRemarks = record.remarks;
+    if (outdoorData.remarks) {
+      updatedRemarks = updatedRemarks ? `${updatedRemarks} | ${outdoorData.remarks}` : outdoorData.remarks;
     }
 
     await record.update({
@@ -461,7 +494,9 @@ class AttendanceService {
       check_out_latitude: latitude,
       check_out_longitude: longitude,
       overtime_minutes: overtimeMinutes,
-      punch_out_office_id: matchingOffice.id,
+      punch_out_office_id: matchingOffice ? matchingOffice.id : null,
+      remarks: updatedRemarks,
+      is_outdoor: isOutdoor,
     });
 
     // Update monthly attendance
@@ -478,6 +513,8 @@ class AttendanceService {
       total_minutes: totalMinutes,
       status,
       early_exit_minutes: earlyExitMinutes,
+      is_outdoor: record.is_outdoor,
+      remarks: record.remarks,
     };
   }
 
@@ -1043,7 +1080,7 @@ class AttendanceService {
   }
 
   // Admin: Get monthly attendance grid for all employees
-  async getAllMonthlyAttendance({ month, year, office_id, company_id, search, department } = {}) {
+  async getAllMonthlyAttendance({ month, year, office_id, company_id, search, department, cycle_type = 'payroll' } = {}) {
     const localToday = getLocalDate(new Date());
     const currentMonth = month ? parseInt(month) : localToday.getMonth() + 1;
     const currentYear = year ? parseInt(year) : localToday.getFullYear();
@@ -1067,23 +1104,30 @@ class AttendanceService {
 
     const empIds = employees.map(e => e.id);
 
-    // Calculate cycle start and end dates based on 26th to 25th cycle
-    let prevMonthYear = currentYear;
-    let prevMonth = currentMonth - 1;
-    if (prevMonth === 0) {
-      prevMonth = 12;
-      prevMonthYear = currentYear - 1;
+    // Support both 'payroll' cycle (26th to 25th) and standard 'calendar' cycle (1st to month end)
+    let startDateStr, endDateStr, startDate, endDate, daysInCycle;
+
+    if (cycle_type === 'calendar') {
+      const lastDay = new Date(currentYear, currentMonth, 0).getDate(); // 28, 29, 30, or 31
+      startDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+      endDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      startDate = new Date(currentYear, currentMonth - 1, 1);
+      endDate = new Date(currentYear, currentMonth - 1, lastDay);
+      daysInCycle = lastDay;
+    } else {
+      let prevMonthYear = currentYear;
+      let prevMonth = currentMonth - 1;
+      if (prevMonth === 0) {
+        prevMonth = 12;
+        prevMonthYear = currentYear - 1;
+      }
+      startDateStr = `${prevMonthYear}-${String(prevMonth).padStart(2, '0')}-26`;
+      endDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-25`;
+      startDate = new Date(prevMonthYear, prevMonth - 1, 26);
+      endDate = new Date(currentYear, currentMonth - 1, 25);
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      daysInCycle = Math.round((endDate - startDate) / oneDayMs) + 1;
     }
-
-    const startDateStr = `${prevMonthYear}-${String(prevMonth).padStart(2, '0')}-26`;
-    const endDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-25`;
-
-    const startDate = new Date(prevMonthYear, prevMonth - 1, 26);
-    const endDate = new Date(currentYear, currentMonth - 1, 25);
-    
-    // Calculate total days in this specific cycle
-    const oneDayMs = 24 * 60 * 60 * 1000;
-    const daysInMonth = Math.round((endDate - startDate) / oneDayMs) + 1;
 
     // Get all daily records for these employees in the cycle
     const dailyRecords = await AttendanceRecord.findAll({
@@ -1096,21 +1140,7 @@ class AttendanceService {
       order: [['date', 'ASC']],
     });
 
-    // Get monthly summaries
-    const monthlySummaries = await MonthlyAttendance.findAll({
-      where: { employee_id: { [Op.in]: empIds }, month: currentMonth, year: currentYear },
-    });
-
-    const monthlyMap = new Map(monthlySummaries.map(m => [m.employee_id, m]));
-
-    // Map records by employee and date
-    const recordMap = new Map();
-    dailyRecords.forEach(r => {
-      if (!recordMap.has(r.employee_id)) recordMap.set(r.employee_id, new Map());
-      recordMap.get(r.employee_id).set(r.date, r);
-    });
-
-    // Get active holidays that fall in this cycle
+    // Get active public holidays
     const holidaysList = await Holiday.findAll({
       where: {
         is_active: true,
@@ -1127,17 +1157,65 @@ class AttendanceService {
       }
     });
 
+    // Get approved leaves for all employees during this period
+    const { LeaveRequest } = require('../models');
+    const approvedLeaves = await LeaveRequest.findAll({
+      where: {
+        employee_id: { [Op.in]: empIds },
+        status: 'approved',
+        from_date: { [Op.lte]: endDateStr },
+        to_date: { [Op.gte]: startDateStr },
+      },
+    });
+
+    const leaveMap = new Map();
+    approvedLeaves.forEach(l => {
+      if (!leaveMap.has(l.employee_id)) leaveMap.set(l.employee_id, []);
+      leaveMap.get(l.employee_id).push(l);
+    });
+
     // Get weekend policy for grid rendering
     const weekendDaysGrid = await _getWeekendDays();
 
+    // Generate days metadata array with day name, number, holiday and weekend status
+    const daysMetadata = [];
+    let metaDayObj = new Date(startDate);
+    while (metaDayObj <= endDate) {
+      const yyyy = metaDayObj.getFullYear();
+      const mm = String(metaDayObj.getMonth() + 1).padStart(2, '0');
+      const dd = String(metaDayObj.getDate()).padStart(2, '0');
+      const dateStr = `${yyyy}-${mm}-${dd}`;
+      const dayOfWeek = metaDayObj.getDay();
+
+      const hol = holidaysList.find(h => dateStr >= h.start_date && dateStr <= h.end_date);
+      const isWeekendDay = weekendDaysGrid.includes(dayOfWeek);
+      const dayShort = metaDayObj.toLocaleDateString('en-US', { weekday: 'short' });
+
+      daysMetadata.push({
+        date: dateStr,
+        day: metaDayObj.getDate(),
+        day_of_week: dayShort,
+        label: `${String(metaDayObj.getDate()).padStart(2, '0')} ${dayShort}`,
+        is_weekend: isWeekendDay,
+        is_holiday: Boolean(hol),
+        holiday_name: hol ? hol.name : null,
+      });
+
+      metaDayObj.setDate(metaDayObj.getDate() + 1);
+    }
+
+    // Map records by employee and date
+    const recordMap = new Map();
+    dailyRecords.forEach(r => {
+      if (!recordMap.has(r.employee_id)) recordMap.set(r.employee_id, new Map());
+      recordMap.get(r.employee_id).set(r.date, r);
+    });
+
     const rows = employees.map(emp => {
       const empRecords = recordMap.get(emp.id) || new Map();
-      const monthly = monthlyMap.get(emp.id);
-
+      const empLeaves = leaveMap.get(emp.id) || [];
       const salary = emp.fixed_gross || 0;
-      const dailyRate = daysInMonth > 0 ? Math.round(salary / daysInMonth) : 0;
 
-      // Build daily grid string
       let grid = '';
       let presentCount = 0, absentCount = 0, woffCount = 0, leaveCount = 0, holidayCount = 0, tourCount = 0;
 
@@ -1149,18 +1227,18 @@ class AttendanceService {
         const dateStr = `${yyyy}-${mm}-${dd}`;
         const dayOfWeek = dObj.getDay();
 
-        // Check if date falls on a public holiday
         const isHoliday = holidaysList.some(h => dateStr >= h.start_date && dateStr <= h.end_date);
         const isWeekendDay = weekendDaysGrid.includes(dayOfWeek);
+        const hasApprovedLeave = empLeaves.some(l => dateStr >= l.from_date && dateStr <= l.to_date);
 
         const record = empRecords.get(dateStr);
         if (record) {
           if (record.status === 'present' || record.status === 'late') {
             grid += 'P'; presentCount++;
           } else if (record.status === 'half_day') {
-            grid += 'P'; presentCount++; // treat half day as present for grid
+            grid += 'P'; presentCount++;
           } else if (record.status === 'tour') {
-            grid += 'T'; tourCount++; // tour is paid like present but shown distinctly
+            grid += 'T'; tourCount++;
           } else if (record.status === 'absent') {
             grid += 'A'; absentCount++;
           } else if (record.status === 'holiday') {
@@ -1171,10 +1249,11 @@ class AttendanceService {
             grid += 'P'; presentCount++;
           }
         } else {
-          // No attendance record for this day
-          const isFutureDate = dObj > localToday; // future dates haven't happened yet
+          const isFutureDate = dObj > localToday;
           if (isFutureDate) {
-            grid += '-'; // future — not yet recorded
+            grid += '-';
+          } else if (hasApprovedLeave) {
+            grid += 'L'; leaveCount++;
           } else if (isHoliday) {
             grid += 'H'; holidayCount++;
           } else if (isWeekendDay) {
@@ -1184,16 +1263,16 @@ class AttendanceService {
           }
         }
 
-        // Advance to next day
         dObj.setDate(dObj.getDate() + 1);
       }
 
       const p = presentCount;
       const a = absentCount;
       const w = woffCount;
-      const l = 0; // half-days are already included in presentCount (shown as 'P')
+      const l = leaveCount;
       const h = holidayCount;
       const t = tourCount;
+      const payableDays = p + w + h + t + l;
 
       return {
         id: emp.emp_code,
@@ -1203,7 +1282,7 @@ class AttendanceService {
         hub: emp.office?.name || '---',
         company: emp.company?.name || '---',
         salary,
-        present: p + l, // present includes half days for display
+        present: p,
         woff: w,
         leave: l,
         holiday: h,
@@ -1211,53 +1290,82 @@ class AttendanceService {
         absent: a,
         grid,
         employee_id: emp.id,
+        // Enterprise Summary Metrics (Req 6.4, 8)
+        muster_days: daysInCycle,
+        present_days: p,
+        payable_days: payableDays,
+        lwp_days: a,
+        holidays: h,
+        week_offs: w,
+        tour_days: t,
+        leave_days: l,
       };
     });
 
     return {
       month: currentMonth,
       year: currentYear,
-      daysInMonth,
+      cycle_type,
+      daysInMonth: daysInCycle,
+      metadata: {
+        cycle_type,
+        month: currentMonth,
+        year: currentYear,
+        month_name: new Date(currentYear, currentMonth - 1, 1).toLocaleString('en-US', { month: 'long' }),
+        start_date: startDateStr,
+        end_date: endDateStr,
+        days_in_cycle: daysInCycle,
+        days_metadata: daysMetadata,
+      },
       rows,
     };
   }
 
-  // Admin: Manual attendance entry
-  async manualEntry(adminId, { employeeId, date, status, reason }) {
-    const emp = await Employee.findOne({ where: { emp_code: employeeId, status: 'active' } });
+  // Admin: Manual attendance entry / Authorized marking on employee's behalf (Req 5.2)
+  async manualEntry(adminId, { employeeId, date, status, reason, is_outdoor, check_in_time, check_out_time }) {
+    let emp = null;
+    if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
+      emp = await Employee.findByPk(employeeId);
+    }
     if (!emp) {
-      throw new AppError(`Employee with code ${employeeId} not found or inactive`, 404);
+      emp = await Employee.findOne({ where: { emp_code: employeeId } });
+    }
+    if (!emp) {
+      throw new AppError(`Employee ${employeeId} not found`, 404);
     }
 
     // Handle both ISO string (from raw request) and Date object (from Joi convert)
     const dateStr = date instanceof Date
       ? date.toISOString().split('T')[0]
       : (date || getLocalDateString(new Date()));
-    const statusMap = { 'Present': 'present', 'Absent': 'absent', 'Half Day': 'half_day' };
-    const recordStatus = statusMap[status] || 'present';
+    const statusMap = { 'Present': 'present', 'Absent': 'absent', 'Half Day': 'half_day', 'Late': 'late' };
+    const recordStatus = statusMap[status] || (status ? status.toLowerCase() : 'present');
 
-    // Build timestamps for Present / Half Day entries so they show meaningful in/out times
+    // Build timestamps for Present / Half Day entries
     let checkInTime = null;
     let checkOutTime = null;
     let totalHours = null;
     let totalMinutes = 0;
 
-    const shiftStartTimeStr = emp.shift_start_time || '10:00:00';
-    const shiftEndTimeStr = emp.shift_end_time || '19:00:00';
+    const shiftStartTimeStr = check_in_time || emp.shift_start_time || '10:00:00';
+    const shiftEndTimeStr = check_out_time || emp.shift_end_time || '19:00:00';
 
-    if (recordStatus === 'present') {
-      checkInTime = createTzDate(dateStr, shiftStartTimeStr);
-      checkOutTime = createTzDate(dateStr, shiftEndTimeStr);
+    if (recordStatus === 'present' || recordStatus === 'late') {
+      const inStr = shiftStartTimeStr.length === 5 ? `${shiftStartTimeStr}:00` : shiftStartTimeStr;
+      const outStr = shiftEndTimeStr.length === 5 ? `${shiftEndTimeStr}:00` : shiftEndTimeStr;
+      checkInTime = createTzDate(dateStr, inStr);
+      checkOutTime = createTzDate(dateStr, outStr);
       
       const startMins = timeStringToMinutes(shiftStartTimeStr, 600);
-      const endMins = timeStringToMinutes(shiftEndTimeStr, 1080);
+      const endMins = timeStringToMinutes(shiftEndTimeStr, 1140);
       totalMinutes = endMins - startMins;
       totalHours = totalMinutes / 60;
     } else if (recordStatus === 'half_day') {
-      checkInTime = createTzDate(dateStr, shiftStartTimeStr);
+      const inStr = shiftStartTimeStr.length === 5 ? `${shiftStartTimeStr}:00` : shiftStartTimeStr;
+      checkInTime = createTzDate(dateStr, inStr);
       
       const startMins = timeStringToMinutes(shiftStartTimeStr, 600);
-      const endMins = timeStringToMinutes(shiftEndTimeStr, 1080);
+      const endMins = timeStringToMinutes(shiftEndTimeStr, 1140);
       const halfDuration = Math.round((endMins - startMins) / 2);
       const halfEndMins = startMins + halfDuration;
       
@@ -1270,6 +1378,10 @@ class AttendanceService {
       totalHours = totalMinutes / 60;
     }
 
+    const outdoorFlag = Boolean(is_outdoor);
+    const method = outdoorFlag ? 'outdoor' : 'manual';
+    const remarkText = `Marked by authorized user ${adminId}: ${reason || (outdoorFlag ? 'Outdoor duty' : 'Manual entry')}`;
+
     // Check if record already exists for this date
     let record = await AttendanceRecord.findOne({ where: { employee_id: emp.id, date: dateStr } });
 
@@ -1280,8 +1392,10 @@ class AttendanceService {
         check_out_time: checkOutTime || record.check_out_time,
         total_hours: totalHours !== null ? totalHours : record.total_hours,
         total_minutes: totalMinutes || record.total_minutes,
-        check_in_method: record.check_in_method || 'manual',
-        remarks: `Manual entry by admin ${adminId}: ${reason || 'No reason provided'}`,
+        check_in_method: method,
+        is_outdoor: outdoorFlag,
+        marked_by_id: adminId,
+        remarks: remarkText,
       });
     } else {
       record = await AttendanceRecord.create({
@@ -1292,18 +1406,20 @@ class AttendanceService {
         check_out_time: checkOutTime,
         total_hours: totalHours,
         total_minutes: totalMinutes,
-        late_by_minutes: 0,
+        late_by_minutes: recordStatus === 'late' ? 30 : 0,
         early_exit_minutes: 0,
         overtime_minutes: 0,
-        check_in_method: 'manual',
-        remarks: `Manual entry by admin ${adminId}: ${reason || 'No reason provided'}`,
+        check_in_method: method,
+        is_outdoor: outdoorFlag,
+        marked_by_id: adminId,
+        remarks: remarkText,
       });
     }
 
     // Recalculate monthly
     await this._updateMonthlyAttendance(emp.id, dateStr);
 
-    logger.info(`Admin ${adminId} manually set attendance for ${employeeId} on ${dateStr} to ${recordStatus}`);
+    logger.info(`Admin ${adminId} authorized attendance entry for ${emp.emp_code} on ${dateStr} as ${recordStatus}`);
     return record;
   }
 

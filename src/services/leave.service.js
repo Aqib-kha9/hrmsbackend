@@ -2,84 +2,125 @@ const { LeaveBalance, LeaveRequest, Employee, sequelize } = require('../models')
 const { AppError } = require('../middleware/error.middleware');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
-const { LEAVE_TYPES, LEAVE_ACCRUAL, PAGINATION } = require('../utils/constants');
+const { PAGINATION } = require('../utils/constants');
 const notificationService = require('./notification.service');
 
 class LeaveService {
   /**
-   * Get leave balance for an employee.
-   * Ensures monthly accrual is up-to-date before returning.
+   * Helper: Ensure annual leave balance record exists for the employee.
+   * Default Annual entitlement: 12 Casual Leave (CL) + 12 Earned Leave (EL) = 24 days/year (Req 9.1).
    */
-  async getLeaveBalance(employeeId) {
-    // Ensure accrual is current
-    await this._ensureAccrualUpToDate(employeeId);
-
+  async _ensureAnnualBalance(employeeId) {
+    const currentYear = new Date().getFullYear();
     let balance = await LeaveBalance.findOne({
       where: { employee_id: employeeId },
     });
 
-    // If no balance exists yet (new employee), create one
     if (!balance) {
-      balance = await this._createInitialBalance(employeeId);
+      balance = await LeaveBalance.create({
+        employee_id: employeeId,
+        year: currentYear,
+        cl_allocated: 12.00,
+        cl_used: 0.00,
+        el_allocated: 12.00,
+        el_carried_forward: 0.00,
+        el_used: 0.00,
+        available: 24,
+        used: 0,
+        admin_granted: 0,
+        lapsed: 0,
+      });
+    } else if (balance.year !== currentYear) {
+      // Annual reset cycle:
+      // CL does NOT carry forward (resets to 12)
+      // EL carries forward unused balance (subject to policy)
+      const unusedEl = Math.max(0, Number(balance.el_allocated || 12) + Number(balance.el_carried_forward || 0) - Number(balance.el_used || 0));
+      await balance.update({
+        year: currentYear,
+        cl_allocated: 12.00,
+        cl_used: 0.00,
+        el_allocated: 12.00,
+        el_carried_forward: unusedEl,
+        el_used: 0.00,
+        available: Math.round(12 + 12 + unusedEl),
+        used: 0,
+      });
     }
 
     return balance;
   }
 
   /**
-   * Apply for leave — single type (EL) only.
+   * Get annual leave balance and entitlement for an employee (Req 9.1 & 9.2).
    */
-  async applyLeave(employeeId, leaveData, isAdminOnBehalf = false) {
-    const { from_date, to_date, duration, reason, contact_during_leave } = leaveData;
+  async getLeaveBalance(employeeId) {
+    const balance = await this._ensureAnnualBalance(employeeId);
 
-    // Ensure accrual is up-to-date first
-    await this._ensureAccrualUpToDate(employeeId);
+    const clAllocated = Number(balance.cl_allocated || 12);
+    const clUsed = Number(balance.cl_used || 0);
+    const clBalance = Math.max(0, clAllocated - clUsed);
 
-    const balance = await LeaveBalance.findOne({
-      where: { employee_id: employeeId },
+    const elAllocated = Number(balance.el_allocated || 12);
+    const elCarried = Number(balance.el_carried_forward || 0);
+    const elUsed = Number(balance.el_used || 0);
+    const elBalance = Math.max(0, (elAllocated + elCarried) - elUsed);
+
+    // Pending leave requests count
+    const pendingCount = await LeaveRequest.count({
+      where: { employee_id: employeeId, status: 'pending' },
     });
 
-    if (!balance) {
-      throw new AppError('Leave balance not set up for your account', 400);
-    }
+    const totalEntitlement = clAllocated + elAllocated + elCarried;
+    const totalRemaining = clBalance + elBalance;
 
-    if (!isAdminOnBehalf) {
-      if (parseInt(duration) < 1 || parseInt(duration) > 2) {
-        throw new AppError('Employees can only apply for 1 or 2 days of leave at a time.', 400);
+    return {
+      id: balance.id,
+      employee_id: employeeId,
+      year: balance.year,
+      // Casual Leave breakdown
+      cl_allocated: clAllocated,
+      cl_used: clUsed,
+      cl_balance: clBalance,
+      // Earned Leave breakdown
+      el_allocated: elAllocated,
+      el_carried_forward: elCarried,
+      el_used: elUsed,
+      el_balance: elBalance,
+      // Totals
+      total_annual_entitlement: totalEntitlement,
+      total_used: clUsed + elUsed,
+      total_remaining_balance: totalRemaining,
+      pending_requests: pendingCount,
+      // Backward-compatible properties
+      available: totalRemaining,
+      used: clUsed + elUsed,
+    };
+  }
+
+  /**
+   * Apply for leave (CL, EL, LWP, or other) (Req 9.1, 9.2, 10).
+   */
+  async applyLeave(employeeId, leaveData, isAdminOnBehalf = false) {
+    const { from_date, to_date, duration, reason, contact_during_leave, leave_type = 'cl' } = leaveData;
+
+    const balanceData = await this.getLeaveBalance(employeeId);
+    const reqDuration = Number(duration) || 1;
+
+    // Check specific balance according to leave type
+    const normalizedType = (leave_type || 'cl').toLowerCase();
+    if (normalizedType === 'cl') {
+      if (balanceData.cl_balance < reqDuration) {
+        throw new AppError(
+          `Insufficient Casual Leave (CL) balance. Available: ${balanceData.cl_balance} day(s), Requested: ${reqDuration} day(s).`,
+          400
+        );
       }
-      const diffTime = Math.abs(new Date(to_date).getTime() - new Date(from_date).getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-      if (diffDays !== parseInt(duration)) {
-        throw new AppError(`Selected dates do not match the requested duration of ${duration} day(s).`, 400);
-      }
-    }
-
-    if (balance.available < duration) {
-      throw new AppError(
-        `Insufficient leave balance. Available: ${balance.available} day(s), Requested: ${duration} day(s)`,
-        400,
-      );
-    }
-
-    // 1-per-month limit only applies to self-applications, NOT when admin/HR applies on behalf
-    if (!isAdminOnBehalf) {
-      const fromDate = new Date(from_date);
-      const monthStart = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-01`;
-      const lastDay = new Date(fromDate.getFullYear(), fromDate.getMonth() + 1, 0).getDate();
-      const monthEnd = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-      const monthlyRequests = await LeaveRequest.findAll({
-        where: {
-          employee_id: employeeId,
-          status: { [Op.in]: ['pending', 'approved'] },
-          from_date: { [Op.lte]: monthEnd },
-          to_date: { [Op.gte]: monthStart },
-        },
-      });
-
-      const totalRequestedInMonth = monthlyRequests.reduce((sum, r) => sum + Number(r.duration), 0);
-      if (totalRequestedInMonth + Number(duration) > 2) {
-        throw new AppError(`You already have ${totalRequestedInMonth} day(s) of leave requested/approved in this month. Maximum 2 leaves per month.`, 409);
+    } else if (normalizedType === 'el') {
+      if (balanceData.el_balance < reqDuration) {
+        throw new AppError(
+          `Insufficient Earned Leave (EL) balance. Available: ${balanceData.el_balance} day(s), Requested: ${reqDuration} day(s).`,
+          400
+        );
       }
     }
 
@@ -94,21 +135,23 @@ class LeaveService {
     });
 
     if (overlapping) {
-      throw new AppError('You have an overlapping leave request for this period', 409);
+      throw new AppError('You already have an active leave request covering this period', 409);
     }
 
     const leaveRequest = await LeaveRequest.create({
       employee_id: employeeId,
-      leave_type: LEAVE_TYPES.EL,
+      leave_type: normalizedType,
       from_date,
       to_date,
-      duration,
+      duration: reqDuration,
       reason,
       contact_during_leave,
       status: 'pending',
+      is_paid: normalizedType !== 'lwp',
+      payroll_treatment: 'pending',
     });
 
-    logger.info(`Employee ID ${employeeId} applied for EL leave (${duration} day(s))${isAdminOnBehalf ? ' [by admin]' : ''}`);
+    logger.info(`Employee ID ${employeeId} applied for ${normalizedType.toUpperCase()} leave (${reqDuration} day(s))${isAdminOnBehalf ? ' [by admin]' : ''}`);
     return leaveRequest;
   }
 
@@ -124,17 +167,7 @@ class LeaveService {
       whereClause.to_date = { [Op.lte]: to };
     }
 
-    const includeClause = search ? [{
-      model: Employee,
-      as: 'employee',
-      attributes: ['id', 'emp_code', 'name', 'department', 'designation', 'profile_image'],
-      where: {
-        [Op.or]: [
-          { name: { [Op.like]: `%${search}%` } },
-          { emp_code: { [Op.like]: `%${search}%` } },
-        ],
-      },
-    }] : [{
+    const includeClause = [{
       model: Employee,
       as: 'employee',
       attributes: ['id', 'emp_code', 'name', 'department', 'designation', 'profile_image'],
@@ -144,18 +177,44 @@ class LeaveService {
       where: whereClause,
       include: includeClause,
       order: [['created_at', 'DESC']],
-      limit,
-      offset,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
     });
 
     return {
       data: rows,
       pagination: {
-        page,
-        limit,
+        page: parseInt(page),
+        limit: parseInt(limit),
         total: count,
         totalPages: Math.ceil(count / limit),
       },
+    };
+  }
+
+  /**
+   * Get complete employee leave history for Admin view (Req 9.3).
+   */
+  async getEmployeeLeaveHistory(employeeId) {
+    const employee = await Employee.findByPk(employeeId, {
+      attributes: ['id', 'name', 'emp_code', 'designation', 'department', 'date_of_joining'],
+    });
+    if (!employee) throw new AppError('Employee not found', 404);
+
+    const balance = await this.getLeaveBalance(employeeId);
+
+    const history = await LeaveRequest.findAll({
+      where: { employee_id: employeeId },
+      include: [
+        { model: Employee, as: 'approver', attributes: ['id', 'name', 'emp_code'] },
+      ],
+      order: [['from_date', 'DESC']],
+    });
+
+    return {
+      employee,
+      balance,
+      history,
     };
   }
 
@@ -167,13 +226,8 @@ class LeaveService {
       where: { id: requestId, employee_id: employeeId },
     });
 
-    if (!request) {
-      throw new AppError('Leave request not found', 404);
-    }
-
-    if (request.status !== 'pending') {
-      throw new AppError('Only pending leave requests can be cancelled', 400);
-    }
+    if (!request) throw new AppError('Leave request not found', 404);
+    if (request.status !== 'pending') throw new AppError('Only pending leave requests can be cancelled', 400);
 
     await request.update({ status: 'cancelled' });
     logger.info(`Leave request ${requestId} cancelled by employee ${employeeId}`);
@@ -208,17 +262,21 @@ class LeaveService {
         as: 'employee',
         where: Object.keys(employeeWhere).length > 0 ? employeeWhere : undefined,
         attributes: ['id', 'emp_code', 'name', 'department', 'designation', 'profile_image'],
+      }, {
+        model: Employee,
+        as: 'approver',
+        attributes: ['id', 'name', 'emp_code'],
       }],
       order: [['created_at', 'DESC']],
-      limit,
-      offset,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
     });
 
     return {
       data: rows,
       pagination: {
-        page,
-        limit,
+        page: parseInt(page),
+        limit: parseInt(limit),
         total: count,
         totalPages: Math.ceil(count / limit),
       },
@@ -226,14 +284,16 @@ class LeaveService {
   }
 
   /**
-   * Approve or reject a leave request.
-   * On approval: deducts from balance and resets no-usage counter.
+   * Approve or reject a leave request (Req 4.3 & 10).
+   * Supports explicit payrollTreatment:
+   * - 'paid': Paid leave, balance deducted
+   * - 'unpaid': Loss of Pay (LWP), no balance deducted, salary deducted in payroll
+   * - 'adjusted_balance': Deduct from annual leave balance
+   * - 'carry_forward_next': Defer deduction to following month
    */
-  async approveLeaveRequest(requestId, action, remarks, approvedBy) {
+  async approveLeaveRequest(requestId, action, remarks, approvedBy, payrollTreatment = null) {
     const request = await LeaveRequest.findByPk(requestId);
-    if (!request) {
-      throw new AppError('Leave request not found', 404);
-    }
+    if (!request) throw new AppError('Leave request not found', 404);
 
     if (request.status !== 'pending') {
       throw new AppError('Leave request is not in pending status', 400);
@@ -243,24 +303,35 @@ class LeaveService {
       throw new AppError('Action must be either "approved" or "rejected"', 400);
     }
 
+    const treatment = payrollTreatment || (action === 'approved' ? (request.leave_type === 'lwp' ? 'unpaid' : 'adjusted_balance') : 'pending');
+
     await request.update({
       status: action,
       approved_by: approvedBy,
       approved_at: new Date(),
       remarks: remarks || '',
+      payroll_treatment: treatment,
+      is_paid: treatment !== 'unpaid',
     });
 
-    // If approved, deduct from leave balance and reset no-usage streak
-    if (action === 'approved') {
-      const balance = await LeaveBalance.findOne({
-        where: { employee_id: request.employee_id },
-      });
+    // If approved and adjusted against balance, deduct from CL or EL
+    if (action === 'approved' && treatment !== 'unpaid') {
+      const balance = await this._ensureAnnualBalance(request.employee_id);
+      const duration = Number(request.duration) || 1;
 
-      if (balance) {
+      if (request.leave_type === 'cl') {
+        const newUsed = Number(balance.cl_used || 0) + duration;
         await balance.update({
-          available: Math.max(0, balance.available - request.duration),
-          used: balance.used + request.duration,
-          consecutive_no_usage_months: 0, // usage resets the streak
+          cl_used: newUsed,
+          used: Number(balance.used || 0) + duration,
+          available: Math.max(0, Number(balance.available || 0) - duration),
+        });
+      } else if (request.leave_type === 'el') {
+        const newUsed = Number(balance.el_used || 0) + duration;
+        await balance.update({
+          el_used: newUsed,
+          used: Number(balance.used || 0) + duration,
+          available: Math.max(0, Number(balance.available || 0) - duration),
         });
       }
     }
@@ -271,8 +342,8 @@ class LeaveService {
       const toFormatted = new Date(request.to_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
       const dateString = request.from_date === request.to_date ? fromFormatted : `${fromFormatted} to ${toFormatted}`;
       
-      const title = action === 'approved' ? 'Leave Approved' : 'Leave Rejected';
-      const msg = `Your leave request for ${dateString} has been ${action}. ${remarks ? `Remarks: ${remarks}` : ''}`;
+      const title = action === 'approved' ? 'Leave Request Approved' : 'Leave Request Rejected';
+      const msg = `Your ${request.leave_type.toUpperCase()} leave for ${dateString} has been ${action}. ${remarks ? `Remarks: ${remarks}` : ''}`;
       const type = action === 'approved' ? 'success' : 'error';
 
       await notificationService.createNotification(
@@ -287,7 +358,7 @@ class LeaveService {
       logger.error(`Failed to send leave notification: ${notifErr.message}`);
     }
 
-    logger.info(`Leave request ${requestId} ${action} by ${approvedBy}`);
+    logger.info(`Leave request ${requestId} ${action} by ${approvedBy} with treatment: ${treatment}`);
     return request;
   }
 
@@ -302,9 +373,10 @@ class LeaveService {
     if (!manager) throw new AppError('Manager not found', 404);
 
     const startDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const endDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+    const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+    const endDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-    const leaveRequests = await LeaveRequest.findAll({
+    const leaves = await LeaveRequest.findAll({
       where: {
         status: 'approved',
         from_date: { [Op.lte]: endDate },
@@ -313,228 +385,13 @@ class LeaveService {
       include: [{
         model: Employee,
         as: 'employee',
-        where: { department: manager.department, status: 'active' },
-        attributes: ['id', 'emp_code', 'name', 'designation', 'profile_image'],
+        where: { department: manager.department },
+        attributes: ['id', 'emp_code', 'name', 'department', 'designation', 'profile_image'],
       }],
       order: [['from_date', 'ASC']],
     });
 
-    return leaveRequests;
-  }
-
-  /**
-   * Admin grants extra leaves to an employee.
-   * These extra leaves never lapse.
-   */
-  async grantExtraLeaves(adminId, employeeId, count, reason) {
-    if (!count || count < 1) {
-      throw new AppError('Grant count must be at least 1', 400);
-    }
-
-    const employee = await Employee.findByPk(employeeId);
-    if (!employee) {
-      throw new AppError('Employee not found', 404);
-    }
-
-    // Ensure accrual is up-to-date
-    await this._ensureAccrualUpToDate(employeeId);
-
-    let balance = await LeaveBalance.findOne({
-      where: { employee_id: employeeId },
-    });
-
-    if (!balance) {
-      balance = await this._createInitialBalance(employeeId);
-    }
-
-    await balance.update({
-      admin_granted: balance.admin_granted + count,
-      available: balance.available + count,
-    });
-
-    logger.info(`Admin ${adminId} granted ${count} extra leave(s) to employee ${employeeId}. Reason: ${reason}`);
-    return balance;
-  }
-
-  // ──────────────────────────────────────────────
-  // PRIVATE: Accrual Engine
-  // ──────────────────────────────────────────────
-
-  /**
-   * Ensure monthly leave accrual is up-to-date for the given employee.
-   * Runs month-by-month from last_accrual_month to current month.
-   *
-   * Rules:
-   * - +2 EL earned per month (onboarding grants 2 EL)
-   * - If no leave used for 3 consecutive months → all accrued leaves lapse (available = admin_granted)
-   * - Admin-granted leaves never lapse
-   */
-  async _ensureAccrualUpToDate(employeeId) {
-    const balance = await LeaveBalance.findOne({
-      where: { employee_id: employeeId },
-    });
-
-    if (!balance) return; // Will be created by _createInitialBalance
-
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
-    // No accrual needed if already processed this month
-    if (balance.last_accrual_month === currentMonth) return;
-
-    // Determine starting month
-    let startMonth = balance.last_accrual_month;
-    if (!startMonth) {
-      // First time: start from the month of joining (or created_at if joining is null)
-      const employee = await Employee.findByPk(employeeId, { attributes: ['date_of_joining', 'created_at'] });
-      if (employee) {
-        const date = employee.date_of_joining || employee.created_at;
-        const doj = new Date(date);
-        startMonth = `${doj.getFullYear()}-${String(doj.getMonth() + 1).padStart(2, '0')}`;
-      } else {
-        startMonth = currentMonth;
-      }
-    }
-
-    const months = this._getMonthRange(startMonth, currentMonth);
-
-    let available = balance.available;
-    let lapsed = balance.lapsed;
-    let consecutive = balance.consecutive_no_usage_months;
-
-    for (const month of months) {
-      // Check if employee used any leave in the PREVIOUS calendar month
-      const prevMonth = this._previousMonth(month);
-      const hadUsage = await this._hadUsageInMonth(employeeId, prevMonth);
-
-      if (hadUsage) {
-        consecutive = 0; // Usage resets the streak
-      } else {
-        consecutive += 1;
-      }
-
-      // If 3+ consecutive months without usage, all accrued leaves lapse
-      if (consecutive >= LEAVE_ACCRUAL.MAX_CARRY_FORWARD_MONTHS) {
-        const accruedLeaves = available - balance.admin_granted;
-        if (accruedLeaves > 0) {
-          lapsed += accruedLeaves;
-          available = balance.admin_granted;
-        }
-        consecutive = 0; // Reset after lapse
-      }
-
-      // Add monthly accrual (+2 EL)
-      available += LEAVE_ACCRUAL.MONTHLY_ACCRUAL;
-    }
-
-    // Persist updates
-    await balance.update({
-      available,
-      lapsed,
-      last_accrual_month: currentMonth,
-      consecutive_no_usage_months: consecutive,
-    });
-
-    logger.debug(
-      `Accrual updated for employee ${employeeId}: ` +
-      `available=${available}, lapsed=${lapsed}, consecutive=${consecutive}, ` +
-      `processed ${months.length} month(s)`,
-    );
-  }
-
-  /**
-   * Create the initial leave balance for a new employee.
-   * Starts with 2 EL (the current month's accrual).
-   */
-  async _createInitialBalance(employeeId) {
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
-    const balance = await LeaveBalance.create({
-      employee_id: employeeId,
-      available: LEAVE_ACCRUAL.MONTHLY_ACCRUAL,
-      used: 0,
-      admin_granted: 0,
-      lapsed: 0,
-      last_accrual_month: currentMonth,
-      consecutive_no_usage_months: 0,
-    });
-
-    logger.info(`Created initial leave balance for employee ${employeeId}`);
-    return balance;
-  }
-
-  /**
-   * Generate an array of YYYY-MM strings from start (exclusive) to end (inclusive).
-   */
-  _getMonthRange(startMonth, endMonth) {
-    const months = [];
-    const [sy, sm] = startMonth.split('-').map(Number);
-    const [ey, em] = endMonth.split('-').map(Number);
-
-    let y = sy;
-    let m = sm + 1; // Start from the NEXT month after startMonth
-    if (m > 12) {
-      m = 1;
-      y += 1;
-    }
-
-    while (y < ey || (y === ey && m <= em)) {
-      months.push(`${y}-${String(m).padStart(2, '0')}`);
-      m += 1;
-      if (m > 12) {
-        m = 1;
-        y += 1;
-      }
-    }
-
-    return months;
-  }
-
-  /**
-   * Get distinct list of departments from employees.
-   */
-  async getDepartments() {
-    const departments = await Employee.findAll({
-      attributes: [[sequelize.fn('DISTINCT', sequelize.col('department')), 'department']],
-      where: { department: { [Op.ne]: null } },
-      order: [[sequelize.col('department'), 'ASC']],
-      raw: true,
-    });
-    return departments.map((d) => d.department);
-  }
-
-  /**
-   * Get the previous month as YYYY-MM.
-   */
-  _previousMonth(month) {
-    const [y, m] = month.split('-').map(Number);
-    if (m === 1) {
-      return `${y - 1}-12`;
-    }
-    return `${y}-${String(m - 1).padStart(2, '0')}`;
-  }
-
-  /**
-   * Check if the employee used any leave (approved request) in a given month.
-   */
-  async _hadUsageInMonth(employeeId, month) {
-    const [y, m] = month.split('-').map(Number);
-    const monthStart = `${y}-${String(m).padStart(2, '0')}-01`;
-    // Last day of month
-    const lastDay = new Date(y, m, 0).getDate();
-    const monthEnd = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-    const usage = await LeaveRequest.findOne({
-      where: {
-        employee_id: employeeId,
-        status: 'approved',
-        from_date: { [Op.lte]: monthEnd },
-        to_date: { [Op.gte]: monthStart },
-      },
-    });
-
-    return !!usage;
+    return leaves;
   }
 }
 

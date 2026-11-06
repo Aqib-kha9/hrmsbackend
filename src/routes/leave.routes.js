@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
-const { authorize, selfOrAdmin } = require('../middleware/role.middleware');
+const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const { validate } = require('../middleware/validate.middleware');
 const { applyLeaveSchema, approveLeaveSchema, leaveQuerySchema, grantLeaveSchema } = require('../validators/leave.validator');
 const leaveController = require('../controllers/leave.controller');
@@ -16,13 +16,14 @@ router.post('/apply', validate(applyLeaveSchema), leaveController.applyLeave);
 router.get('/my-requests', leaveController.getMyLeaveRequests);
 router.patch('/cancel/:id', leaveController.cancelLeaveRequest);
 
-// Admin/HR/Manager routes
-router.get('/requests', authorize('admin', 'hr', 'manager'), validate(leaveQuerySchema, 'query'), leaveController.getAllLeaveRequests);
-router.patch('/approve/:id', authorize('admin', 'hr', 'manager'), validate(approveLeaveSchema), leaveController.approveLeaveRequest);
-router.get('/team', authorize('admin', 'hr', 'manager'), leaveController.getTeamLeaves);
+// Admin/HR/Manager routes (gated by dynamic permissions)
+router.get('/requests', requirePermission('leave:read'), validate(leaveQuerySchema, 'query'), leaveController.getAllLeaveRequests);
+router.get('/history/:employeeId', requirePermission('leave:read'), leaveController.getEmployeeLeaveHistory);
+router.patch('/approve/:id', requirePermission('leave:approve'), validate(approveLeaveSchema), leaveController.approveLeaveRequest);
+router.get('/team', requirePermission('leave:read'), leaveController.getTeamLeaves);
 
 // Admin-only: grant extra leaves
-router.post('/grant', authorize('admin'), validate(grantLeaveSchema), leaveController.grantLeave);
+router.post('/grant', requirePermission('leave:create'), validate(grantLeaveSchema), leaveController.grantLeave);
 
 // Departments list (for filters)
 router.get('/departments', leaveController.getDepartments);

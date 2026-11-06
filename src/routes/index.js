@@ -19,6 +19,8 @@ const tourExpenseRoutes = require('./tour_expense.routes');
 const holidayRoutes = require('./holiday.routes');
 const reportRoutes = require('./report.routes');
 const signatoryRoutes = require('./signatory.routes');
+const onboardingRoutes = require('./onboarding.routes');
+const roleRoutes = require('./role.routes');
 
 // Health check is already in app.js at root level
 // API routes mounted at /api in app.js
@@ -33,6 +35,7 @@ router.use('/employees', employeeRoutes);
 router.use('/documents', documentRoutes);
 router.use('/letters', letterRoutes);
 router.use('/signatories', signatoryRoutes);
+router.use('/onboarding', onboardingRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/companies', companyRoutes);
@@ -41,5 +44,6 @@ router.use('/config', configRoutes);
 router.use('/tour-expenses', tourExpenseRoutes);
 router.use('/holidays', holidayRoutes);
 router.use('/reports', reportRoutes);
+router.use('/roles', roleRoutes);
 
 module.exports = router;

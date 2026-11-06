@@ -220,7 +220,6 @@ class LetterController {
       });
 
       let letterId = null;
-      // Save letter record only if it's for a real employee
       if (resolvedEmployeeId) {
         const letter = await letterService.issueLetter({
           employee_id: resolvedEmployeeId,
@@ -229,6 +228,21 @@ class LetterController {
           content: content || '',
           issued_date: new Date(),
           status: 'issued',
+          signatory_id: req.body.signatory_id || null,
+        }, req.employee.id);
+        letterId = letter.id;
+      } else if (candidateData) {
+        const letter = await letterService.issueLetter({
+          employee_id: null,
+          candidate_name: candidateData.name || null,
+          candidate_email: candidateData.email || null,
+          candidate_phone: candidateData.phone || null,
+          type,
+          title,
+          content: content || '',
+          issued_date: new Date(),
+          status: 'issued',
+          signatory_id: req.body.signatory_id || null,
         }, req.employee.id);
         letterId = letter.id;
       }

@@ -1,10 +1,10 @@
 const { verifyAccessToken, verifyRefreshToken } = require('../utils/jwt');
 const { error } = require('../utils/response');
-const { Employee } = require('../models');
+const { Employee, Role, Permission } = require('../models');
 
 /**
  * Authentication middleware — verifies JWT access token
- * Attaches decoded user to req.user
+ * Attaches decoded user to req.employee along with fine-grained permissions
  */
 const authenticate = async (req, res, next) => {
   try {
@@ -21,9 +21,23 @@ const authenticate = async (req, res, next) => {
       return error(res, 'Invalid or expired access token', 401);
     }
 
-    // Verify employee still exists and is active
+    // Verify employee still exists and is active, with their RBAC role and permissions
     const employee = await Employee.findByPk(decoded.id, {
-      attributes: ['id', 'emp_code', 'name', 'email', 'role', 'status', 'department', 'designation', 'office_id'],
+      attributes: ['id', 'emp_code', 'name', 'email', 'role', 'role_id', 'status', 'department', 'designation', 'office_id'],
+      include: [
+        {
+          model: Role,
+          as: 'roleDetails',
+          include: [
+            {
+              model: Permission,
+              as: 'permissions',
+              attributes: ['slug', 'module', 'action'],
+              through: { attributes: [] },
+            },
+          ],
+        },
+      ],
     });
 
     if (!employee) {
@@ -34,7 +48,21 @@ const authenticate = async (req, res, next) => {
       return error(res, 'Account is inactive or suspended', 401);
     }
 
+    // Extract permission slugs
+    let permissions = [];
+    if (employee.roleDetails && employee.roleDetails.permissions) {
+      permissions = employee.roleDetails.permissions.map((p) => p.slug);
+    }
+
+    const roleNormalized = (employee.role || '').toUpperCase();
+    if (roleNormalized === 'SUPER_ADMIN') {
+      if (!permissions.includes('*')) {
+        permissions.unshift('*');
+      }
+    }
+
     req.employee = employee;
+    req.employee.permissions = permissions;
     next();
   } catch (err) {
     return error(res, 'Authentication failed', 401);

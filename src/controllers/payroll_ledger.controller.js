@@ -94,6 +94,45 @@ class PayrollLedgerController {
       return next(err);
     }
   }
+
+  // ── GET /payroll/entry/:entryId/pdf — Download PDF Payslip (Req 3.1) ──
+  async downloadEntryPayslip(req, res, next) {
+    try {
+      const { entryId } = req.params;
+      const pdfBuffer = await payrollLedgerService.generateEntryPayslipPDF(entryId);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Salary_Slip_Entry_${entryId}.pdf"`);
+      return res.send(pdfBuffer);
+    } catch (err) {
+      logger.error(`[PayrollLedger] downloadEntryPayslip error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // ── POST /payroll/entry/:entryId/send-email — Email Payslip to Employee (Req 3.1) ──
+  async emailEntryPayslip(req, res, next) {
+    try {
+      const { entryId } = req.params;
+      const { email } = req.body;
+      const result = await payrollLedgerService.sendPayslipEmail(entryId, email);
+      return success(res, 'Payslip emailed successfully', result, 200);
+    } catch (err) {
+      logger.error(`[PayrollLedger] emailEntryPayslip error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // ── POST /payroll/cycle/:cycleId/send-all-payslips — Batch Email Cycle Payslips (Req 3.1) ──
+  async emailAllCyclePayslips(req, res, next) {
+    try {
+      const { cycleId } = req.params;
+      const result = await payrollLedgerService.sendAllCyclePayslips(cycleId);
+      return success(res, `Payslip email dispatch completed: ${result.sent} sent, ${result.failed} failed`, result, 200);
+    } catch (err) {
+      logger.error(`[PayrollLedger] emailAllCyclePayslips error: ${err.message}`);
+      return next(err);
+    }
+  }
 }
 
 module.exports = new PayrollLedgerController();

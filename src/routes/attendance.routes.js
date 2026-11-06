@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
-const { authorize, selfOrAdmin } = require('../middleware/role.middleware');
+const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const { validate } = require('../middleware/validate.middleware');
 const { punchInSchema, punchOutSchema, monthlyQuerySchema, manualEntrySchema, adminLiveQuerySchema, adminHistoryQuerySchema, adminMonthlyQuerySchema, markTourSchema, tourListQuerySchema, cancelTourSchema } = require('../validators/attendance.validator');
 const attendanceController = require('../controllers/attendance.controller');
@@ -18,24 +18,24 @@ router.get('/history', attendanceController.getAttendanceHistory);
 
 // Admin/HR/Manager routes
 router.get('/employee/:employeeId', selfOrAdmin(), attendanceController.getEmployeeAttendance);
-router.get('/team', authorize('admin', 'hr', 'manager'), attendanceController.getTeamAttendance);
-router.patch('/override/:id', authorize('admin', 'hr'), attendanceController.overrideAttendance);
+router.get('/team', requirePermission('attendance:read'), attendanceController.getTeamAttendance);
+router.patch('/override/:id', requirePermission('attendance:update'), attendanceController.overrideAttendance);
 
 // Admin: Full attendance management
-router.get('/admin/live', authorize('admin', 'hr'), validate(adminLiveQuerySchema, 'query'), attendanceController.getLiveAttendance);
-router.get('/admin/history-all', authorize('admin', 'hr'), validate(adminHistoryQuerySchema, 'query'), attendanceController.getAllAttendanceHistory);
-router.get('/admin/monthly-all', authorize('admin', 'hr'), validate(adminMonthlyQuerySchema, 'query'), attendanceController.getAllMonthlyAttendance);
-router.post('/admin/manual-entry', authorize('admin', 'hr'), validate(manualEntrySchema), attendanceController.manualEntry);
+router.get('/admin/live', requirePermission('attendance:read'), validate(adminLiveQuerySchema, 'query'), attendanceController.getLiveAttendance);
+router.get('/admin/history-all', requirePermission('attendance:read'), validate(adminHistoryQuerySchema, 'query'), attendanceController.getAllAttendanceHistory);
+router.get('/admin/monthly-all', requirePermission('attendance:read'), validate(adminMonthlyQuerySchema, 'query'), attendanceController.getAllMonthlyAttendance);
+router.post('/admin/manual-entry', requirePermission('attendance:create'), validate(manualEntrySchema), attendanceController.manualEntry);
 
 // ── Tour management routes ──
 // Admin/HR: Mark an employee on tour (creates tour + attendance records)
-router.post('/admin/tours', authorize('admin', 'hr'), validate(markTourSchema), attendanceController.markTour);
+router.post('/admin/tours', requirePermission('attendance:create'), validate(markTourSchema), attendanceController.markTour);
 // Admin/HR: Get all tours (paginated + filters)
-router.get('/admin/tours', authorize('admin', 'hr'), validate(tourListQuerySchema, 'query'), attendanceController.getAllTours);
+router.get('/admin/tours', requirePermission('attendance:read'), validate(tourListQuerySchema, 'query'), attendanceController.getAllTours);
 // Admin/HR: Get a single tour by ID (with attendance records)
-router.get('/admin/tours/:id', authorize('admin', 'hr'), attendanceController.getTourById);
+router.get('/admin/tours/:id', requirePermission('attendance:read'), attendanceController.getTourById);
 // Admin/HR: Cancel a tour (past days → absent, future days → deleted)
-router.patch('/admin/tours/:id/cancel', authorize('admin', 'hr'), validate(cancelTourSchema), attendanceController.cancelTour);
+router.patch('/admin/tours/:id/cancel', requirePermission('attendance:update'), validate(cancelTourSchema), attendanceController.cancelTour);
 
 // Employee: Check if currently on tour (mobile app punch screen)
 router.get('/tour-status', attendanceController.getTourStatus);

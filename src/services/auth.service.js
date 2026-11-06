@@ -11,7 +11,20 @@ class AuthService {
   async login(email, password) {
     const employee = await Employee.findOne({ 
       where: { email },
-      include: ['office', 'company']
+      include: [
+        'office',
+        'company',
+        {
+          association: 'roleDetails',
+          include: [
+            {
+              association: 'permissions',
+              attributes: ['slug', 'module', 'action'],
+              through: { attributes: [] },
+            },
+          ],
+        },
+      ]
     });
     if (!employee) {
       throw new AppError('Invalid email or password', 401);
@@ -38,16 +51,33 @@ class AuthService {
 
     logger.info(`Employee ${employee.emp_code} logged in successfully`);
 
+    let permissions = [];
+    if (employee.roleDetails && employee.roleDetails.permissions) {
+      permissions = employee.roleDetails.permissions.map((p) => p.slug);
+    }
+    const roleNormalized = (employee.role || '').toUpperCase();
+    if (roleNormalized === 'SUPER_ADMIN') {
+      if (!permissions.includes('*')) permissions.unshift('*');
+    }
+
     return {
       token: accessToken,
       refreshToken,
+      permissions,
       employee: {
         id: employee.id,
         emp_code: employee.emp_code,
         name: employee.name,
         email: employee.email,
         phone: employee.phone,
-        role: employee.role,
+        role: employee.roleDetails?.name || employee.role,
+        role_id: employee.role_id,
+        permissions,
+        role_details: employee.roleDetails ? {
+          id: employee.roleDetails.id,
+          name: employee.roleDetails.name,
+          display_name: employee.roleDetails.display_name,
+        } : null,
         designation: employee.designation,
         department: employee.department,
         office_id: employee.office_id,
@@ -97,15 +127,44 @@ class AuthService {
     });
 
     if (existingEmployee) {
+      if (existingEmployee.status === 'resigned') {
+        throw new AppError(
+          `Candidate with email "${employeeData.email}" has previously resigned from the organization (Emp ID: ${existingEmployee.emp_code}, Name: ${existingEmployee.name}). Normal onboarding is blocked to prevent accidental duplicate accounts. Please use the Re-Hiring workflow to reactivate.`,
+          409
+        );
+      }
       throw new AppError('Employee with this email already exists', 409);
     }
 
+    // Check PAN if provided (Req 23)
+    if (employeeData.pan_number) {
+      const existingPan = await Employee.findOne({ where: { pan_number: employeeData.pan_number } });
+      if (existingPan) {
+        if (existingPan.status === 'resigned') {
+          throw new AppError(
+            `An employee with PAN "${employeeData.pan_number}" has previously resigned from the organization (Emp ID: ${existingPan.emp_code}, Name: ${existingPan.name}). Please use the Re-Hiring workflow.`,
+            409
+          );
+        }
+        throw new AppError(`Employee with PAN ${employeeData.pan_number} already exists (${existingPan.emp_code})`, 409);
+      }
+    }
+
+    // Automatic Sequential Employee ID fallback (Req 1.2)
+    let empCode = employeeData.emp_code;
+    if (!empCode || empCode.trim() === '' || empCode.startsWith('TEMP')) {
+      const employeeService = require('./employee.service');
+      empCode = await employeeService.getNextEmployeeCode('EMP');
+    }
+
     const existingCode = await Employee.findOne({
-      where: { emp_code: employeeData.emp_code },
+      where: { emp_code: empCode },
     });
 
     if (existingCode) {
-      throw new AppError('Employee code already exists', 409);
+      // If code already taken, get next sequential code automatically
+      const employeeService = require('./employee.service');
+      empCode = await employeeService.getNextEmployeeCode('EMP');
     }
 
     const plainPassword = employeeData.password || 'Welcome@123';
@@ -125,7 +184,7 @@ class AuthService {
       result = await sequelize.transaction(async (t) => {
         // 1. Create Employee
         const employee = await Employee.create({
-          emp_code: employeeData.emp_code,
+          emp_code: empCode,
           name: employeeData.name,
           email: employeeData.email,
           phone: employeeData.phone,
@@ -155,6 +214,9 @@ class AuthService {
           ifsc_code: employeeData.ifsc_code,
           // Statutory
           pan_number: employeeData.pan_number,
+          aadhaar_number: employeeData.aadhaar_number || employeeData.aadhaar || null,
+          lic_details: employeeData.lic_details || null,
+          blood_group: employeeData.blood_group || null,
           pf_number: employeeData.pf_number,
           uan: employeeData.uan,
           // Location
@@ -237,7 +299,7 @@ class AuthService {
         await Notification.create({
           employee_id: employee.id,
           title: 'Welcome Aboard! 🎉',
-          message: `Welcome to Apaar Logistics & Cold Supply Chain Pvt Ltd, ${employeeData.name}! Your employee code is ${employeeData.emp_code}. Please complete your profile and acknowledge your offer letter.`,
+          message: `Welcome to Apaar Logistics & Cold Supply Chain Pvt Ltd, ${employeeData.name}! Your employee code is ${employee.emp_code}. Please complete your profile and acknowledge your offer letter.`,
           type: 'success',
           category: 'onboarding',
           is_read: false,
@@ -453,6 +515,16 @@ class AuthService {
         { association: 'office' },
         { association: 'company' },
         {
+          association: 'roleDetails',
+          include: [
+            {
+              association: 'permissions',
+              attributes: ['slug', 'module', 'action'],
+              through: { attributes: [] },
+            },
+          ],
+        },
+        {
           association: 'salaryStructures',
           order: [['effective_from', 'DESC']],
           limit: 1,
@@ -462,6 +534,15 @@ class AuthService {
 
     if (!employee) {
       throw new AppError('Employee not found', 404);
+    }
+
+    let permissions = [];
+    if (employee.roleDetails && employee.roleDetails.permissions) {
+      permissions = employee.roleDetails.permissions.map((p) => p.slug);
+    }
+    const roleNormalized = (employee.role || '').toUpperCase();
+    if (roleNormalized === 'SUPER_ADMIN') {
+      if (!permissions.includes('*')) permissions.unshift('*');
     }
 
     const latestSalary = employee.salaryStructures && employee.salaryStructures.length > 0
@@ -485,7 +566,14 @@ class AuthService {
       name: employee.name,
       email: employee.email,
       phone: employee.phone,
-      role: employee.role,
+      role: employee.roleDetails?.name || employee.role,
+      role_id: employee.role_id,
+      permissions,
+      role_details: employee.roleDetails ? {
+        id: employee.roleDetails.id,
+        name: employee.roleDetails.name,
+        display_name: employee.roleDetails.display_name,
+      } : null,
       designation: employee.designation,
       department: employee.department,
       branch: employee.office ? employee.office.name : null,

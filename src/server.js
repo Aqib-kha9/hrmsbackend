@@ -4,7 +4,8 @@ if (process.env.NODE_ENV) {
 }
 const app = require('./app');
 const logger = require('./utils/logger');
-const { sequelize } = require('./models');
+const models = require('./models');
+const { sequelize } = models;
 
 const PORT = process.env.PORT || 5000;
 
@@ -50,11 +51,51 @@ async function startServer() {
       logger.warn('Failed to run index cleanup:', e.message);
     }
 
+    // Auto-verify and add any missing table columns from models before index sync
+    try {
+      const queryInterface = sequelize.getQueryInterface();
+      for (const [modelName, model] of Object.entries(models)) {
+        if (!model.tableName) continue;
+        let tableDescription;
+        try {
+          tableDescription = await queryInterface.describeTable(model.tableName);
+        } catch (err) {
+          continue; // Table will be created by sequelize.sync
+        }
+        const existingColumns = Object.keys(tableDescription);
+        const attributes = model.rawAttributes;
+        for (const [attrName, attrDef] of Object.entries(attributes)) {
+          const colName = attrDef.field || attrName;
+          if (!existingColumns.includes(colName)) {
+            try {
+              await queryInterface.addColumn(model.tableName, colName, attrDef);
+              logger.info(`Auto-added missing column [${colName}] to [${model.tableName}]`);
+            } catch (colErr) {
+              // Ignore if already added or race condition
+            }
+          }
+        }
+      }
+    } catch (colCheckErr) {
+      logger.warn('Column auto-migration check warning:', colCheckErr.message);
+    }
+
     // Sync models (alter: true adds missing columns without data loss)
     const forceSync = process.env.DB_SYNC_FORCE === 'true';
     const alterSync = process.env.DB_SYNC_ALTER === 'true';
     await sequelize.sync({ force: forceSync, alter: alterSync });
     logger.info(`✅ Database models synced (force: ${forceSync}, alter: ${alterSync})`);
+
+    // Ensure RBAC system roles and permissions exist
+    try {
+      const roleCount = await models.Role.count();
+      if (roleCount === 0) {
+        const { seedRBAC } = require('./seeders/seed_rbac');
+        await seedRBAC();
+      }
+    } catch (rbacErr) {
+      logger.warn('RBAC auto-seed check:', rbacErr.message);
+    }
 
     // Start Express server
     const server = app.listen(PORT, () => {

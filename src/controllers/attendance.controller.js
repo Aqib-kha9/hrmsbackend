@@ -6,8 +6,14 @@ class AttendanceController {
   async punchIn(req, res, next) {
     try {
       const employeeId = req.employee.id;
-      const { latitude, longitude } = req.body;
-      const result = await attendanceService.punchIn(employeeId, latitude, longitude);
+      const { latitude, longitude, is_outdoor, is_field_duty, remarks, reason, check_in_method } = req.body;
+      const result = await attendanceService.punchIn(employeeId, latitude, longitude, {
+        is_outdoor,
+        is_field_duty,
+        remarks,
+        reason,
+        check_in_method,
+      });
       return success(res, 'Punch in successful', result, 200);
     } catch (err) {
       logger.error(`Punch in error: ${err.message}`);
@@ -18,8 +24,14 @@ class AttendanceController {
   async punchOut(req, res, next) {
     try {
       const employeeId = req.employee.id;
-      const { latitude, longitude } = req.body;
-      const result = await attendanceService.punchOut(employeeId, latitude, longitude);
+      const { latitude, longitude, is_outdoor, is_field_duty, remarks, reason, check_in_method } = req.body;
+      const result = await attendanceService.punchOut(employeeId, latitude, longitude, {
+        is_outdoor,
+        is_field_duty,
+        remarks,
+        reason,
+        check_in_method,
+      });
       return success(res, 'Punch out successful', result, 200);
     } catch (err) {
       logger.error(`Punch out error: ${err.message}`);
@@ -125,8 +137,8 @@ class AttendanceController {
   // Admin: Get monthly attendance grid for all employees
   async getAllMonthlyAttendance(req, res, next) {
     try {
-      const { month, year, office_id, company_id, search, department } = req.query;
-      const result = await attendanceService.getAllMonthlyAttendance({ month, year, office_id, company_id, search, department });
+      const { month, year, office_id, company_id, search, department, cycle_type } = req.query;
+      const result = await attendanceService.getAllMonthlyAttendance({ month, year, office_id, company_id, search, department, cycle_type });
       return success(res, 'Monthly attendance grid fetched', result, 200);
     } catch (err) {
       logger.error(`Get all monthly attendance error: ${err.message}`);
@@ -134,13 +146,21 @@ class AttendanceController {
     }
   }
 
-  // Admin: Manual attendance entry
+  // Admin: Manual attendance entry / Authorized marking on employee's behalf
   async manualEntry(req, res, next) {
     try {
       const adminId = req.employee.id;
-      const { employeeId, date, status, reason } = req.body;
-      const result = await attendanceService.manualEntry(adminId, { employeeId, date, status, reason });
-      return success(res, 'Manual attendance entry created', result, 200);
+      const { employeeId, date, status, reason, is_outdoor, check_in_time, check_out_time } = req.body;
+      const result = await attendanceService.manualEntry(adminId, {
+        employeeId,
+        date,
+        status,
+        reason,
+        is_outdoor,
+        check_in_time,
+        check_out_time,
+      });
+      return success(res, 'Manual attendance entry created successfully', result, 200);
     } catch (err) {
       logger.error(`Manual entry error: ${err.message}`);
       return next(err);

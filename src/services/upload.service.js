@@ -54,7 +54,7 @@ class UploadService {
       // Generate the public URL
       // We store relative URL like /uploads/hrms/documents/filename.pdf
       const relativeUrl = `/uploads/${folderPath}/${filename}`;
-      const fullUrl = `${env.APP_URL}${relativeUrl}`;
+      const fullUrl = `${env.BACKEND_URL || env.APP_URL}${relativeUrl}`;
       
       logger.info(`File uploaded locally to: ${filePath}`);
       
@@ -139,7 +139,7 @@ class UploadService {
     if (publicId && publicId.startsWith('http')) {
       return publicId;
     }
-    return `${env.APP_URL}${publicId}`;
+    return `${env.BACKEND_URL || env.APP_URL}${publicId}`;
   }
 }
 

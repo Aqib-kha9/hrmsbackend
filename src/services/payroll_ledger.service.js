@@ -1,10 +1,12 @@
-const { PayrollCycle, PayrollEntry, Employee, SalaryStructure, Office, Company, sequelize } = require('../models');
+const { PayrollCycle, PayrollEntry, Employee, SalaryStructure, Office, Company, Payslip, SalaryComponent, sequelize } = require('../models');
 const { AppError } = require('../middleware/error.middleware');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { PAGINATION, PT_SLABS } = require('../utils/constants');
 const { getWeekendDays, getHolidaysInMonth, countWorkingDaysInMonth, countElapsedWorkingDays, getPTSlabs } = require('../utils/payrollHelper');
 const notificationService = require('./notification.service');
+const payslipPdfService = require('./payslip_pdf.service');
+const emailService = require('./email.service');
 
 /**
  * Payroll ledger service — mirrors the frontend's calculateProductionNet() logic.
@@ -52,7 +54,20 @@ class PayrollLedgerService {
   _calculateRow(row, daysInMonth = 28, slabs) {
     const D = daysInMonth;
     const elapsedDays = row._elapsedDays != null ? Math.min(row._elapsedDays, D) : D;
-    const payableDays = Math.max(0, elapsedDays - (row.absent_days || 0));
+
+    // Administrative Control & Manual Leave Adjustment (Req 4.1 & 4.2)
+    const rawAbsent = Number(row.absent_days || 0);
+    const leaveAdjust = Number(row.leave_adjustment_days || 0);
+    const carryForward = Number(row.leave_carry_forward_days || 0);
+
+    // Effective absent days deducted this cycle
+    const effectiveAbsentDays = Math.max(0, rawAbsent + leaveAdjust - carryForward);
+
+    // If Admin explicitly set manual_payable_days, respect it directly; else compute from effective absent days
+    const payableDays = (row.manual_payable_days !== null && row.manual_payable_days !== undefined && !isNaN(Number(row.manual_payable_days)))
+      ? Math.max(0, Math.min(D, Number(row.manual_payable_days)))
+      : Math.max(0, elapsedDays - effectiveAbsentDays);
+
     const fixedGross = Number(row.fixed_gross) || 0;
 
     const fixedBasic = Math.round(fixedGross * 0.40);
@@ -534,7 +549,23 @@ class PayrollLedgerService {
     const entry = await PayrollEntry.findByPk(entryId);
     if (!entry) throw new AppError('Payroll entry not found', 404);
 
-    const allowed = ['absent_days', 'bonus', 'previous_arrears', 'incentive', 'loan_deduction', 'other_deduction', 'status'];
+    const allowed = [
+      'absent_days',
+      'leave_adjustment_days',
+      'leave_carry_forward_days',
+      'manual_payable_days',
+      'admin_notes',
+      'present_days',
+      'paid_leave_days',
+      'lwp_days',
+      'total_muster_days',
+      'bonus',
+      'previous_arrears',
+      'incentive',
+      'loan_deduction',
+      'other_deduction',
+      'status'
+    ];
     const updates = {};
     for (const key of allowed) {
       if (data[key] !== undefined) updates[key] = data[key];
@@ -617,6 +648,197 @@ class PayrollLedgerService {
 
     logger.info(`Disbursed payroll cycle ${cycleId} (${cycle.month} ${cycle.year})`);
     return cycle;
+  }
+
+  // ── Automatic Payslip PDF Generation (Req 3.1, 3.2, 3.3) ──
+
+  async generateEntryPayslipPDF(entryId) {
+    const entry = await PayrollEntry.findByPk(entryId, {
+      include: [
+        { model: PayrollCycle, as: 'cycle' },
+        {
+          model: Employee,
+          as: 'employee',
+          include: [
+            { model: Office, as: 'office' },
+            { model: Company, as: 'company' }
+          ]
+        }
+      ]
+    });
+    if (!entry) throw new AppError('Payroll entry not found', 404);
+
+    const emp = entry.employee;
+    const cycle = entry.cycle;
+    const structure = await SalaryStructure.findOne({
+      where: { employee_id: emp.id },
+      order: [['effective_from', 'DESC']]
+    });
+
+    const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index, cycle.year);
+    const slabs = await getPTSlabs();
+
+    const row = {
+      fixed_gross: structure?.fixed_gross || emp.fixed_gross || 0,
+      pf_applicable: structure?.pf_applicable ?? emp.pf_applicable,
+      pf_ceiling: structure?.pf_ceiling ?? emp.pf_ceiling,
+      pf_contribution_mode: structure?.pf_contribution_mode || emp.pf_contribution_mode,
+      pf_employee_rate: structure?.pf_employee_rate ?? 0.12,
+      pf_employer_rate: structure?.pf_employer_rate ?? 0.12,
+      esic_applicable: structure?.esic_applicable ?? emp.esic_applicable,
+      esic_contribution_mode: structure?.esic_contribution_mode || emp.esic_contribution_mode,
+      esic_employee_rate: structure?.esic_employee_rate ?? 0.0075,
+      esic_employer_rate: structure?.esic_employer_rate ?? 0.0325,
+      pt_applicable: structure?.pt_applicable !== false,
+      absent_days: entry.absent_days,
+      leave_adjustment_days: entry.leave_adjustment_days,
+      leave_carry_forward_days: entry.leave_carry_forward_days,
+      manual_payable_days: entry.manual_payable_days,
+      bonus: entry.bonus,
+      previous_arrears: entry.previous_arrears,
+      incentive: entry.incentive,
+      loan_deduction: entry.loan_deduction,
+      other_deduction: entry.other_deduction,
+      conveyance: structure?.conveyance || 0,
+      medical_allowance: structure?.medical_allowance || 0,
+    };
+
+    const calc = this._calculateRow(row, dynamicDays, slabs);
+
+    const payslipData = {
+      employee_name: emp.name,
+      emp_code: emp.emp_code,
+      designation: emp.designation,
+      department: emp.department,
+      location: emp.location || emp.office?.name,
+      office_address: emp.office?.address,
+      company_name: emp.company_name || emp.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+      month: cycle.month,
+      year: cycle.year,
+      uan: emp.uan,
+      pf_number: emp.pf_number,
+      pan_number: emp.pan_number,
+      bank_name: emp.bank_name,
+      bank_account_number: emp.bank_account_number,
+      // Attendance (Req 3.2)
+      total_muster_days: dynamicDays,
+      present_days: entry.present_days || calc.payableDays,
+      payable_days: calc.payableDays,
+      lwp_days: Math.max(0, dynamicDays - calc.payableDays),
+      // Earnings & Deductions (Req 3.3)
+      basic_salary: calc.basic,
+      hra: calc.hra,
+      other_allowance: calc.other,
+      special_allowance: structure?.special_allowance || 0,
+      conveyance: structure?.conveyance || 0,
+      medical_allowance: structure?.medical_allowance || 0,
+      bonus: Number(entry.bonus) || 0,
+      incentive: Number(entry.incentive) || 0,
+      previous_arrears: Number(entry.previous_arrears) || 0,
+      total_earnings: calc.totalEarnings,
+      gross_salary: calc.totalEarnings,
+      pf_employee: calc.pf,
+      esi_employee: calc.esi,
+      professional_tax: calc.pt,
+      loan_deduction: Number(entry.loan_deduction) || 0,
+      other_deduction: Number(entry.other_deduction) || 0,
+      total_deductions: calc.grossDeductions,
+      net_salary: calc.net,
+      pf_employer: calc.pfEmployer,
+      esi_employer: calc.esiEmployer,
+      ctc: calc.totalMonthlyCTC,
+    };
+
+    return await payslipPdfService.generatePayslipPDF(payslipData);
+  }
+
+  // ── Send Payslip PDF via Email (Req 3.1) ──
+
+  async sendPayslipEmail(entryId, recipientEmail = null) {
+    const entry = await PayrollEntry.findByPk(entryId, {
+      include: [
+        { model: PayrollCycle, as: 'cycle' },
+        { model: Employee, as: 'employee' }
+      ]
+    });
+    if (!entry) throw new AppError('Payroll entry not found', 404);
+
+    const emp = entry.employee;
+    const cycle = entry.cycle;
+    const targetEmail = recipientEmail || emp.email;
+    if (!targetEmail) throw new AppError('No email address registered for this employee', 400);
+
+    const pdfBuffer = await this.generateEntryPayslipPDF(entryId);
+    const cycleName = `${cycle.month} ${cycle.year}`;
+    const filename = `${emp.name.replace(/\s+/g, '_')}_Payslip_${cycleName.replace(/\s+/g, '_')}.pdf`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff;">
+        <div style="background-color: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h2 style="color: #ffffff; margin: 0; font-size: 20px;">Salary Slip &mdash; ${cycleName}</h2>
+          <p style="color: #94a3b8; margin: 6px 0 0; font-size: 13px;">Apaar Logistics & Cold Supply Chain Pvt Ltd</p>
+        </div>
+        <div style="padding: 24px 8px;">
+          <p style="font-size: 15px; color: #334155;">Dear <strong>${emp.name}</strong>,</p>
+          <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+            Please find attached your official salary slip for <strong>${cycleName}</strong>.
+          </p>
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0 0 8px; font-size: 13px; color: #64748b;"><strong>Employee ID:</strong> ${emp.emp_code}</p>
+            <p style="margin: 0 0 8px; font-size: 13px; color: #64748b;"><strong>Designation:</strong> ${emp.designation || 'N/A'}</p>
+            <p style="margin: 0; font-size: 13px; color: #64748b;"><strong>Payable Days:</strong> ${entry.manual_payable_days || 'Full Month'}</p>
+          </div>
+          <p style="font-size: 13px; color: #475569;">
+            The PDF document contains your full attendance muster days, payable days, earnings, and statutory deductions.
+          </p>
+        </div>
+        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; text-align: center; font-size: 11px; color: #94a3b8;">
+          This is an automated communication from Apaar Logistics HRMS.
+        </div>
+      </div>
+    `;
+
+    await emailService.sendMail({
+      to: targetEmail,
+      subject: `Salary Slip for ${cycleName} — ${emp.name}`,
+      html,
+      attachments: [
+        {
+          filename,
+          content: pdfBuffer,
+        }
+      ]
+    });
+
+    logger.info(`Salary slip emailed to ${targetEmail} for ${emp.emp_code} (${cycleName})`);
+    return { success: true, email: targetEmail, filename };
+  }
+
+  // ── Batch Send All Payslips for a Cycle (Req 3.1) ──
+
+  async sendAllCyclePayslips(cycleId) {
+    const entries = await PayrollEntry.findAll({
+      where: { cycle_id: cycleId },
+      include: [{ model: Employee, as: 'employee' }]
+    });
+
+    let sent = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const entry of entries) {
+      if (!entry.employee || !entry.employee.email) continue;
+      try {
+        await this.sendPayslipEmail(entry.id);
+        sent++;
+      } catch (e) {
+        failed++;
+        errors.push({ employee: entry.employee.emp_code, error: e.message });
+        logger.error(`Failed to send payslip to ${entry.employee.emp_code}: ${e.message}`);
+      }
+    }
+
+    return { total: entries.length, sent, failed, errors };
   }
 
   // ── Internal: auto-create a cycle for the current month ──
