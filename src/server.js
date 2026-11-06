@@ -80,6 +80,13 @@ async function startServer() {
       logger.warn('Column auto-migration check warning:', colCheckErr.message);
     }
 
+    // Auto-fix schema constraints & nullability (e.g. employee_id on letters for candidate offers)
+    try {
+      await sequelize.query('ALTER TABLE `letters` MODIFY COLUMN `employee_id` INT NULL;');
+    } catch (e) {
+      // Table will be created by sequelize.sync if it does not exist
+    }
+
     // Sync models (alter: true adds missing columns without data loss)
     const forceSync = process.env.DB_SYNC_FORCE === 'true';
     const alterSync = process.env.DB_SYNC_ALTER === 'true';

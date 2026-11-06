@@ -123,8 +123,8 @@ Employee.hasMany(Document, { foreignKey: 'employee_id', as: 'documents' });
 Document.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
 
 // Employee → Letter (employee receiving the letter)
-Employee.hasMany(Letter, { foreignKey: 'employee_id', as: 'letters' });
-Letter.belongsTo(Employee, { foreignKey: 'employee_id', as: 'issuedTo' });
+Employee.hasMany(Letter, { foreignKey: 'employee_id', as: 'letters', onDelete: 'SET NULL', onUpdate: 'CASCADE' });
+Letter.belongsTo(Employee, { foreignKey: 'employee_id', as: 'issuedTo', onDelete: 'SET NULL', onUpdate: 'CASCADE' });
 // Letter → Employee (issuer)
 Letter.belongsTo(Employee, { foreignKey: 'issued_by', as: 'issuedBy' });
 Employee.hasMany(Letter, { foreignKey: 'issued_by', as: 'lettersIssued' });
