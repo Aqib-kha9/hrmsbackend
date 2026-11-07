@@ -1,6 +1,30 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { Employee, Office, SalaryStructure, SalaryRevision, sequelize, AttendanceRecord, MonthlyAttendance, LeaveBalance, LeaveRequest, SalaryComponent, Payslip, LoanPayment, Loan, PayrollEntry, PerformanceObjective, PerformanceReview, Document, Letter, Notification } = require('../models');
+const {
+  Employee,
+  Office,
+  SalaryStructure,
+  SalaryRevision,
+  sequelize,
+  AttendanceRecord,
+  MonthlyAttendance,
+  LeaveBalance,
+  LeaveRequest,
+  SalaryComponent,
+  Payslip,
+  LoanPayment,
+  Loan,
+  PayrollEntry,
+  PayrollCycle,
+  PerformanceObjective,
+  PerformanceReview,
+  Document,
+  Letter,
+  Notification,
+  Tour,
+  TourExpense,
+  OnboardingInvitation,
+} = require('../models');
 const { AppError } = require('../middleware/error.middleware');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
@@ -147,21 +171,43 @@ class EmployeeService {
 
     const t = await sequelize.transaction();
     try {
-      // Order matters — delete children before parent
+      // 1. Delete direct child records
       await AttendanceRecord.destroy({ where: { employee_id: employeeId }, transaction: t });
       await MonthlyAttendance.destroy({ where: { employee_id: employeeId }, transaction: t });
       await LeaveBalance.destroy({ where: { employee_id: employeeId }, transaction: t });
       await LeaveRequest.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await SalaryComponent.destroy({
-        where: { payslip_id: sequelize.literal(`(SELECT id FROM payslips WHERE employee_id = ${employeeId})`) },
+
+      // 2. Payslips & Salary Components (fetch IDs first to prevent 'Subquery returns more than 1 row' error)
+      const payslips = await Payslip.findAll({
+        attributes: ['id'],
+        where: { employee_id: employeeId },
         transaction: t,
       });
+      const payslipIds = payslips.map((p) => p.id);
+      if (payslipIds.length > 0) {
+        await SalaryComponent.destroy({
+          where: { payslip_id: { [Op.in]: payslipIds } },
+          transaction: t,
+        });
+      }
       await Payslip.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await LoanPayment.destroy({
-        where: { loan_id: sequelize.literal(`(SELECT id FROM loans WHERE employee_id = ${employeeId})`) },
+
+      // 3. Loans & Loan Payments (fetch IDs first)
+      const loans = await Loan.findAll({
+        attributes: ['id'],
+        where: { employee_id: employeeId },
         transaction: t,
       });
+      const loanIds = loans.map((l) => l.id);
+      if (loanIds.length > 0) {
+        await LoanPayment.destroy({
+          where: { loan_id: { [Op.in]: loanIds } },
+          transaction: t,
+        });
+      }
       await Loan.destroy({ where: { employee_id: employeeId }, transaction: t });
+
+      // 4. Other employee-owned records
       await PayrollEntry.destroy({ where: { employee_id: employeeId }, transaction: t });
       await PerformanceObjective.destroy({ where: { employee_id: employeeId }, transaction: t });
       await PerformanceReview.destroy({ where: { employee_id: employeeId }, transaction: t });
@@ -170,7 +216,14 @@ class EmployeeService {
       await Notification.destroy({ where: { employee_id: employeeId }, transaction: t });
       await SalaryRevision.destroy({ where: { employee_id: employeeId }, transaction: t });
       await SalaryStructure.destroy({ where: { employee_id: employeeId }, transaction: t, force: true });
-      // Nullify approver FKs in LeaveRequest and Loan (don't cascade-delete those)
+      await TourExpense.destroy({ where: { employee_id: employeeId }, transaction: t });
+      await Tour.destroy({ where: { employee_id: employeeId }, transaction: t });
+
+      // 5. Nullify foreign key references where this employee acted as an approver/author/manager
+      await AttendanceRecord.update(
+        { marked_by_id: null },
+        { where: { marked_by_id: employeeId }, transaction: t }
+      );
       await LeaveRequest.update(
         { approved_by: null },
         { where: { approved_by: employeeId }, transaction: t }
@@ -187,8 +240,36 @@ class EmployeeService {
         { approved_by: null },
         { where: { approved_by: employeeId }, transaction: t }
       );
+      await Letter.update(
+        { issued_by: null },
+        { where: { issued_by: employeeId }, transaction: t }
+      );
+      await Tour.update(
+        { created_by: null },
+        { where: { created_by: employeeId }, transaction: t }
+      );
+      await Tour.update(
+        { cancelled_by: null },
+        { where: { cancelled_by: employeeId }, transaction: t }
+      );
+      await TourExpense.update(
+        { approved_by: null },
+        { where: { approved_by: employeeId }, transaction: t }
+      );
+      await PayrollCycle.update(
+        { paid_by: null },
+        { where: { paid_by: employeeId }, transaction: t }
+      );
+      await OnboardingInvitation.update(
+        { created_by: null },
+        { where: { created_by: employeeId }, transaction: t }
+      );
+      await OnboardingInvitation.update(
+        { approved_by: null },
+        { where: { approved_by: employeeId }, transaction: t }
+      );
 
-      // Finally, delete the employee
+      // 6. Finally, delete the employee
       await employee.destroy({ transaction: t });
       await t.commit();
       logger.info(`Employee ${employee.emp_code} (ID: ${employeeId}) permanently deleted`);
