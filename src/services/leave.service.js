@@ -211,9 +211,27 @@ class LeaveService {
       order: [['from_date', 'DESC']],
     });
 
+    const approvedRequests = history.filter(r => r.status === 'approved');
+    const pendingRequests = history.filter(r => r.status === 'pending');
+    const rejectedRequests = history.filter(r => r.status === 'rejected');
+
+    const totalDaysTaken = approvedRequests.reduce((sum, r) => sum + (Number(r.duration) || 0), 0);
+    const pendingDays = pendingRequests.reduce((sum, r) => sum + (Number(r.duration) || 0), 0);
+
     return {
       employee,
       balance,
+      summary: {
+        total_leave_taken: totalDaysTaken,
+        approved_count: approvedRequests.length,
+        approved_days: totalDaysTaken,
+        pending_count: pendingRequests.length,
+        pending_days: pendingDays,
+        rejected_count: rejectedRequests.length,
+        applicable_balance: balance.total_remaining_balance,
+        cl_balance: balance.cl_balance,
+        el_balance: balance.el_balance,
+      },
       history,
     };
   }
