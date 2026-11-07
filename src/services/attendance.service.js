@@ -1249,6 +1249,8 @@ class AttendanceService {
             grid += 'H'; holidayCount++;
           } else if (record.status === 'weekend') {
             grid += 'W'; woffCount++;
+          } else if (record.status === 'leave' || record.status === 'on_leave') {
+            grid += 'L'; leaveCount++;
           } else {
             grid += 'P'; presentCount++;
           }
@@ -1296,6 +1298,7 @@ class AttendanceService {
         employee_id: emp.id,
         // Enterprise Summary Metrics (Req 6.4, 8)
         muster_days: daysInCycle,
+        total_days: daysInCycle,
         present_days: p,
         payable_days: payableDays,
         lwp_days: a,
