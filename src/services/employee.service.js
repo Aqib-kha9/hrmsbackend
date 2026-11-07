@@ -34,7 +34,7 @@ class EmployeeService {
   async getEmployeeById(employeeId) {
     const employee = await Employee.findByPk(employeeId, {
       attributes: { exclude: ['password', 'refresh_token'] },
-      include: ['office'],
+      include: ['office', 'company', 'roleDetails'],
     });
 
     if (!employee) {
