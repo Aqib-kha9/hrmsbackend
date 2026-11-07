@@ -116,4 +116,46 @@ router.put('/pt-slabs', authenticate, requirePermission('settings:update'), asyn
   }
 });
 
+
+// ── Late Attendance Threshold (Req 5.3) ──────────────────────────
+// Values: integer minutes (default 60 = 1 hour)
+router.get('/late-threshold', authenticate, async (req, res) => {
+  try {
+    const setting = await SystemSetting.findByPk('late_threshold_minutes');
+    const minutes = setting ? parseInt(setting.value, 10) : 60;
+    res.json({
+      success: true,
+      data: {
+        lateThresholdMinutes: isNaN(minutes) ? 60 : minutes,
+        description: 'Grace period threshold before marking arrival as late (default: 60 minutes / 1 hour)',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.put('/late-threshold', authenticate, requirePermission('settings:update'), async (req, res) => {
+  try {
+    const { lateThresholdMinutes } = req.body;
+    const minutes = parseInt(lateThresholdMinutes, 10);
+    if (isNaN(minutes) || minutes < 0 || minutes > 360) {
+      return res.status(400).json({
+        success: false,
+        message: 'lateThresholdMinutes must be an integer between 0 and 360 minutes',
+      });
+    }
+
+    await SystemSetting.upsert({ key: 'late_threshold_minutes', value: String(minutes) });
+
+    res.json({
+      success: true,
+      data: { lateThresholdMinutes: minutes },
+      message: `Late threshold updated successfully to ${minutes} minutes.`,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;

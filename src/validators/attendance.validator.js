@@ -75,9 +75,9 @@ const manualEntrySchema = Joi.object({
       'date.format': 'Date must be in YYYY-MM-DD format',
       'any.required': 'Date is required',
     }),
-  status: Joi.string().valid('Present', 'Absent', 'Half Day').required()
+  status: Joi.string().valid('Present', 'Absent', 'Half Day', 'Late').required()
     .messages({
-      'any.only': 'Status must be Present, Absent, or Half Day',
+      'any.only': 'Status must be Present, Absent, Half Day, or Late',
       'any.required': 'Status is required',
     }),
   reason: Joi.string().allow('', null).max(500).optional(),

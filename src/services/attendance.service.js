@@ -842,13 +842,14 @@ class AttendanceService {
     const todayRecords = await AttendanceRecord.findAll({
       where: { employee_id: { [Op.in]: empIds }, date: today },
       include: [
-        { model: Office, as: 'punchInOffice', attributes: ['id', 'name'] }
+        { model: Office, as: 'punchInOffice', attributes: ['id', 'name'] },
+        { model: Employee, as: 'markedBy', attributes: ['id', 'name', 'emp_code'] }
       ]
     });
 
     // Device name mapping for frontend display
     const deviceLabel = (method) => {
-      const map = { biometric: 'Biometric', gps: 'GPS/Mobile', manual: 'Manual', qr_code: 'QR Code', web: 'Web App' };
+      const map = { biometric: 'Biometric', gps: 'GPS/Mobile', manual: 'Manual', qr_code: 'QR Code', web: 'Web App', outdoor: 'Outdoor Duty' };
       return map[method] || 'Web App';
     };
 
@@ -901,6 +902,7 @@ class AttendanceService {
 
       return {
         id: emp.emp_code,
+        employeeNumericId: emp.id,
         name: emp.name,
         designation: emp.designation || '',
         department: emp.department || '---',
@@ -911,6 +913,8 @@ class AttendanceService {
         company: emp.company?.name || '---',
         distance,
         device,
+        isOutdoor: Boolean(record?.is_outdoor || record?.check_in_method === 'outdoor'),
+        markedBy: record?.markedBy ? { id: record.markedBy.id, name: record.markedBy.name, empCode: record.markedBy.emp_code } : null,
         shift: 'General',
         hours: record?.check_out_time ? hours : (record?.check_in_time ? 'Ongoing' : '0h'),
         overtime,
