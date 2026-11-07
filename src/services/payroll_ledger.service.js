@@ -159,6 +159,11 @@ class PayrollLedgerService {
       fixedGross, fixedBasic, fixedHra, fixedOther,
       basic, hra, other, proratedGross, totalEarnings,
       payableDays,
+      effectiveAbsentDays,
+      leaveAdjustmentDays: leaveAdjust,
+      leaveCarryForwardDays: carryForward,
+      manualPayableDays: (row.manual_payable_days !== null && row.manual_payable_days !== undefined && !isNaN(Number(row.manual_payable_days))) ? Number(row.manual_payable_days) : null,
+      lop: fixedGross - proratedGross,
       pf, esi, pt, grossDeductions, net,
       pfEmployer, esiEmployer, totalMonthlyCTC,
     };
@@ -294,6 +299,24 @@ class PayrollLedgerService {
         bankName: emp.bank_name || '--',
         bankAccountNumber: emp.bank_account_number || '--',
         workingDays: Math.max(0, dynamicDays - absentDays),
+        leaveAdjustmentDays: Number(entry.leave_adjustment_days) || 0,
+        leave_adjustment_days: Number(entry.leave_adjustment_days) || 0,
+        leaveCarryForwardDays: Number(entry.leave_carry_forward_days) || 0,
+        leave_carry_forward_days: Number(entry.leave_carry_forward_days) || 0,
+        manualPayableDays: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+        manual_payable_days: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+        adminNotes: entry.admin_notes || '',
+        admin_notes: entry.admin_notes || '',
+        totalMusterDays: entry.total_muster_days || dynamicDays,
+        total_muster_days: entry.total_muster_days || dynamicDays,
+        presentDays: Number(entry.present_days) || calculation.payableDays,
+        present_days: Number(entry.present_days) || calculation.payableDays,
+        paidLeaveDays: Number(entry.paid_leave_days) || 0,
+        paid_leave_days: Number(entry.paid_leave_days) || 0,
+        lwpDays: calculation.effectiveAbsentDays !== undefined ? calculation.effectiveAbsentDays : (entry.lwp_days ? Number(entry.lwp_days) : absentDays),
+        lwp_days: calculation.effectiveAbsentDays !== undefined ? calculation.effectiveAbsentDays : (entry.lwp_days ? Number(entry.lwp_days) : absentDays),
+        payableDays: calculation.payableDays,
+        payable_days: calculation.payableDays,
         ...calculation,
       };
     });
@@ -368,6 +391,24 @@ class PayrollLedgerService {
         bankName: emp.bank_name || '--',
         bankAccountNumber: emp.bank_account_number || '--',
         workingDays: Math.max(0, dynamicDays - (entry.absent_days || 0)),
+        leaveAdjustmentDays: Number(entry.leave_adjustment_days) || 0,
+        leave_adjustment_days: Number(entry.leave_adjustment_days) || 0,
+        leaveCarryForwardDays: Number(entry.leave_carry_forward_days) || 0,
+        leave_carry_forward_days: Number(entry.leave_carry_forward_days) || 0,
+        manualPayableDays: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+        manual_payable_days: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+        adminNotes: entry.admin_notes || '',
+        admin_notes: entry.admin_notes || '',
+        totalMusterDays: entry.total_muster_days || dynamicDays,
+        total_muster_days: entry.total_muster_days || dynamicDays,
+        presentDays: Number(entry.present_days) || calculation.payableDays,
+        present_days: Number(entry.present_days) || calculation.payableDays,
+        paidLeaveDays: Number(entry.paid_leave_days) || 0,
+        paid_leave_days: Number(entry.paid_leave_days) || 0,
+        lwpDays: calculation.effectiveAbsentDays !== undefined ? calculation.effectiveAbsentDays : (entry.lwp_days ? Number(entry.lwp_days) : (entry.absent_days || 0)),
+        lwp_days: calculation.effectiveAbsentDays !== undefined ? calculation.effectiveAbsentDays : (entry.lwp_days ? Number(entry.lwp_days) : (entry.absent_days || 0)),
+        payableDays: calculation.payableDays,
+        payable_days: calculation.payableDays,
         ...calculation,
       };
     });
@@ -548,7 +589,12 @@ class PayrollLedgerService {
   // ── API: PATCH /payroll/entry/:entryId — update a single entry ──
 
   async updateEntry(entryId, data) {
-    const entry = await PayrollEntry.findByPk(entryId);
+    const entry = await PayrollEntry.findByPk(entryId, {
+      include: [
+        { model: PayrollCycle, as: 'cycle' },
+        { model: Employee, as: 'employee' },
+      ],
+    });
     if (!entry) throw new AppError('Payroll entry not found', 404);
 
     const allowed = [
@@ -574,7 +620,41 @@ class PayrollLedgerService {
     }
 
     await entry.update(updates);
-    return entry;
+
+    // Compute updated row values
+    const cycle = entry.cycle;
+    const emp = entry.employee;
+    let dynamicDays = 30;
+    if (cycle) {
+      const daysInfo = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
+      dynamicDays = daysInfo.workingDays || 30;
+    }
+    const ptSlabs = await getPTSlabs();
+    const calculation = this._calculateRow({
+      ...emp.toJSON(),
+      ...entry.toJSON(),
+      fixed_gross: emp.fixed_gross,
+      pf_applicable: emp.pf_applicable,
+      pf_ceiling: emp.pf_ceiling,
+      esic_applicable: emp.esic_applicable,
+    }, dynamicDays, ptSlabs);
+
+    return {
+      ...entry.toJSON(),
+      ...calculation,
+      leaveAdjustmentDays: Number(entry.leave_adjustment_days) || 0,
+      leave_adjustment_days: Number(entry.leave_adjustment_days) || 0,
+      leaveCarryForwardDays: Number(entry.leave_carry_forward_days) || 0,
+      leave_carry_forward_days: Number(entry.leave_carry_forward_days) || 0,
+      manualPayableDays: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+      manual_payable_days: entry.manual_payable_days !== null && entry.manual_payable_days !== undefined ? Number(entry.manual_payable_days) : null,
+      adminNotes: entry.admin_notes || '',
+      admin_notes: entry.admin_notes || '',
+      payableDays: calculation.payableDays,
+      payable_days: calculation.payableDays,
+      lwpDays: calculation.effectiveAbsentDays,
+      lwp_days: calculation.effectiveAbsentDays,
+    };
   }
 
   // ── API: PATCH /payroll/entry/:entryId/status — change status ──
@@ -968,13 +1048,37 @@ class PayrollLedgerService {
 
     const monthlyMap = new Map(monthlyStats.map(m => [m.employee_id, m]));
 
+    // Look up previous cycle to automatically carry forward leaves (Req 4.2)
+    let prevMonthIndex = monthIndex - 1;
+    let prevYear = year;
+    if (prevMonthIndex < 0) {
+      prevMonthIndex = 11;
+      prevYear = year - 1;
+    }
+    const prevCycle = await PayrollCycle.findOne({
+      where: { month_index: prevMonthIndex, year: prevYear },
+      include: [{ model: PayrollEntry, as: 'entries' }]
+    });
+    const prevCarryMap = new Map();
+    if (prevCycle && prevCycle.entries) {
+      for (const pEntry of prevCycle.entries) {
+        const carry = Number(pEntry.leave_carry_forward_days) || 0;
+        if (carry > 0) {
+          prevCarryMap.set(pEntry.employee_id, carry);
+        }
+      }
+    }
+
     const entries = employees.map(emp => {
       const monthly = monthlyMap.get(emp.id);
       const absentDays = monthly ? (Number(monthly.absent_days) + Number(monthly.half_days) * 0.5) : 0;
+      const carriedDays = prevCarryMap.get(emp.id) || 0;
       return {
         cycle_id: cycle.id,
         employee_id: emp.id,
         absent_days: absentDays,
+        leave_adjustment_days: carriedDays,
+        admin_notes: carriedDays > 0 ? `Auto-carried ${carriedDays} leave days from ${prevCycle?.month || 'previous cycle'}` : null,
         status: 'Draft',
       };
     });
