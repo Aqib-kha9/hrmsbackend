@@ -246,8 +246,14 @@ class EmployeeService {
           { issued_by: null },
           { where: { issued_by: employeeId }, transaction: t }
         );
+        const fallbackAdmin = await Employee.findOne({
+          where: { id: { [Op.ne]: employeeId }, role: { [Op.in]: ['admin', 'super_admin'] } },
+          attributes: ['id'],
+          transaction: t,
+        });
+        const fallbackAdminId = fallbackAdmin ? fallbackAdmin.id : 1;
         await Tour.update(
-          { created_by: null },
+          { created_by: fallbackAdminId },
           { where: { created_by: employeeId }, transaction: t }
         );
         await Tour.update(

@@ -67,7 +67,7 @@ const Tour = sequelize.define('Tour', {
   },
   created_by: {
     type: DataTypes.INTEGER,
-    allowNull: false,
+    allowNull: true,
     references: { model: 'employees', key: 'id' },
     comment: 'Admin/HR who created the tour',
   },
