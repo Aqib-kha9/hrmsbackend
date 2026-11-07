@@ -100,6 +100,28 @@ async function startServer() {
         const { seedRBAC } = require('./seeders/seed_rbac');
         await seedRBAC();
       }
+
+      // Auto-sync legacy employees missing role_id to corresponding System Role
+      const nullRoleEmployees = await models.Employee.findAll({ where: { role_id: null } });
+      if (nullRoleEmployees.length > 0) {
+        const roles = await models.Role.findAll();
+        const roleMap = new Map(roles.map((r) => [r.name.toUpperCase(), r]));
+        for (const emp of nullRoleEmployees) {
+          const lower = (emp.role || 'employee').toLowerCase();
+          let targetRole = roleMap.get('EMPLOYEE');
+          if (lower.includes('admin') || lower === 'super_admin') {
+            targetRole = roleMap.get('SUPER_ADMIN') || roleMap.get('ADMIN');
+          } else if (lower === 'hr') {
+            targetRole = roleMap.get('HR');
+          } else if (lower === 'manager') {
+            targetRole = roleMap.get('MANAGER');
+          }
+          if (targetRole) {
+            await emp.update({ role_id: targetRole.id });
+          }
+        }
+        logger.info(`✅ Auto-synced role_id for ${nullRoleEmployees.length} legacy employees`);
+      }
     } catch (rbacErr) {
       logger.warn('RBAC auto-seed check:', rbacErr.message);
     }

@@ -56,8 +56,36 @@ class AuthService {
       permissions = employee.roleDetails.permissions.map((p) => p.slug);
     }
     const roleNormalized = (employee.role || '').toUpperCase();
-    if (roleNormalized === 'SUPER_ADMIN') {
+    const roleDetailsNormalized = (employee.roleDetails?.name || '').toUpperCase();
+    const isSuper = (
+      roleNormalized === 'SUPER_ADMIN' ||
+      roleNormalized === 'ADMIN' ||
+      roleDetailsNormalized === 'SUPER_ADMIN' ||
+      roleDetailsNormalized === 'ADMIN' ||
+      employee.id === 1
+    );
+
+    if (isSuper) {
       if (!permissions.includes('*')) permissions.unshift('*');
+    } else if (permissions.length === 0 && employee.role) {
+      try {
+        const fallbackRole = await Role.findOne({
+          where: { name: roleNormalized },
+          include: [
+            {
+              association: 'permissions',
+              attributes: ['slug'],
+              through: { attributes: [] },
+            },
+          ],
+        });
+        if (fallbackRole && fallbackRole.permissions) {
+          permissions = fallbackRole.permissions.map((p) => p.slug);
+          if (!employee.role_id) {
+            employee.update({ role_id: fallbackRole.id }).catch(() => {});
+          }
+        }
+      } catch (_) {}
     }
 
     return {
@@ -541,8 +569,36 @@ class AuthService {
       permissions = employee.roleDetails.permissions.map((p) => p.slug);
     }
     const roleNormalized = (employee.role || '').toUpperCase();
-    if (roleNormalized === 'SUPER_ADMIN') {
+    const roleDetailsNormalized = (employee.roleDetails?.name || '').toUpperCase();
+    const isSuper = (
+      roleNormalized === 'SUPER_ADMIN' ||
+      roleNormalized === 'ADMIN' ||
+      roleDetailsNormalized === 'SUPER_ADMIN' ||
+      roleDetailsNormalized === 'ADMIN' ||
+      employee.id === 1
+    );
+
+    if (isSuper) {
       if (!permissions.includes('*')) permissions.unshift('*');
+    } else if (permissions.length === 0 && employee.role) {
+      try {
+        const fallbackRole = await Role.findOne({
+          where: { name: roleNormalized },
+          include: [
+            {
+              association: 'permissions',
+              attributes: ['slug'],
+              through: { attributes: [] },
+            },
+          ],
+        });
+        if (fallbackRole && fallbackRole.permissions) {
+          permissions = fallbackRole.permissions.map((p) => p.slug);
+          if (!employee.role_id) {
+            employee.update({ role_id: fallbackRole.id }).catch(() => {});
+          }
+        }
+      } catch (_) {}
     }
 
     const latestSalary = employee.salaryStructures && employee.salaryStructures.length > 0

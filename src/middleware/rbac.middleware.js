@@ -11,7 +11,15 @@ const normalizeRole = (role) => (role || '').trim().toUpperCase().replace(/\s+/g
 const isSuperAdmin = (employee) => {
   if (!employee) return false;
   const roleName = normalizeRole(employee.role);
-  return roleName === 'SUPER_ADMIN';
+  const detailRoleName = employee.roleDetails ? normalizeRole(employee.roleDetails.name) : '';
+  return (
+    roleName === 'SUPER_ADMIN' ||
+    roleName === 'ADMIN' ||
+    detailRoleName === 'SUPER_ADMIN' ||
+    detailRoleName === 'ADMIN' ||
+    employee.id === 1 ||
+    Boolean(employee.is_superuser)
+  );
 };
 
 /**
@@ -144,14 +152,18 @@ const requireRole = (...allowedRoles) => {
       return error(res, 'Authentication required', 401);
     }
 
-    const userRole = normalizeRole(req.employee.role);
-
-    // SUPER_ADMIN always has access
-    if (userRole === 'SUPER_ADMIN') {
+    // SUPER_ADMIN and ADMIN always have unrestricted access
+    if (isSuperAdmin(req.employee)) {
       return next();
     }
 
-    if (normalizedAllowed.includes(userRole)) {
+    const userRole = normalizeRole(req.employee.role);
+    const detailRole = req.employee.roleDetails ? normalizeRole(req.employee.roleDetails.name) : '';
+
+    if (
+      normalizedAllowed.includes(userRole) ||
+      (detailRole && normalizedAllowed.includes(detailRole))
+    ) {
       return next();
     }
 

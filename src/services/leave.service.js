@@ -393,6 +393,42 @@ class LeaveService {
 
     return leaves;
   }
+
+  /**
+   * Get list of unique departments across all employees for filtering.
+   */
+  async getDepartments() {
+    try {
+      const results = await Employee.findAll({
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('department')), 'department']],
+        where: {
+          department: {
+            [Op.and]: [
+              { [Op.ne]: null },
+              { [Op.ne]: '' },
+            ],
+          },
+        },
+        raw: true,
+      });
+
+      const dbDepartments = results.map((r) => r.department).filter(Boolean);
+      const defaultDepartments = [
+        'Administration',
+        'Engineering',
+        'Finance',
+        'Human Resources',
+        'Marketing',
+        'Operations',
+        'Sales',
+      ];
+      const merged = Array.from(new Set([...defaultDepartments, ...dbDepartments])).sort();
+      return merged;
+    } catch (err) {
+      logger.error('Failed to get departments in leave service:', err);
+      return ['Administration', 'Human Resources', 'Operations', 'Sales', 'Marketing', 'Finance'];
+    }
+  }
 }
 
 module.exports = new LeaveService();
