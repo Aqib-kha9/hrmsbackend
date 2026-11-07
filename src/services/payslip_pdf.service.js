@@ -70,7 +70,10 @@ class PayslipPdfService {
            .font('Helvetica')
            .text(payslipData.office_address || payslipData.location || 'Corporate Office, India', 36, 72, { align: 'center', width: 523 });
 
-        const cycleTitle = `SALARY SLIP FOR THE MONTH OF ${String(payslipData.month || '').toUpperCase()} ${payslipData.year || ''}`;
+        const monthStr = String(payslipData.month || '').trim();
+        const hasYearInMonth = payslipData.year && monthStr.includes(String(payslipData.year));
+        const cycleFormatted = hasYearInMonth ? monthStr : `${monthStr} ${payslipData.year || ''}`.trim();
+        const cycleTitle = `SALARY SLIP FOR THE MONTH OF ${cycleFormatted.toUpperCase()}`;
         doc.rect(36, 88, 523, 24).fill(lightBg);
         doc.rect(36, 88, 523, 24).stroke(borderColor);
         doc.fillColor(primaryColor)

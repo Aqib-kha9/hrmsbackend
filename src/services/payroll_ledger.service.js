@@ -721,7 +721,7 @@ class PayrollLedgerService {
     }
 
     // Send notifications to all employees in this cycle
-    const cycleText = `${cycle.month} ${cycle.year}`;
+    const cycleText = String(cycle.month || '').includes(String(cycle.year)) ? cycle.month : `${cycle.month} ${cycle.year}`;
     for (const entry of entries) {
       await notificationService.createNotification(
         entry.employee_id,
@@ -868,7 +868,7 @@ class PayrollLedgerService {
     if (!targetEmail) throw new AppError('No email address registered for this employee', 400);
 
     const pdfBuffer = await this.generateEntryPayslipPDF(entryId);
-    const cycleName = `${cycle.month} ${cycle.year}`;
+    const cycleName = String(cycle.month || '').includes(String(cycle.year)) ? cycle.month : `${cycle.month} ${cycle.year}`;
     const filename = `${emp.name.replace(/\s+/g, '_')}_Payslip_${cycleName.replace(/\s+/g, '_')}.pdf`;
 
     const html = `
