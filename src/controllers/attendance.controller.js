@@ -137,8 +137,9 @@ class AttendanceController {
   // Admin: Get monthly attendance grid for all employees
   async getAllMonthlyAttendance(req, res, next) {
     try {
-      const { month, year, office_id, company_id, search, department, cycle_type } = req.query;
-      const result = await attendanceService.getAllMonthlyAttendance({ month, year, office_id, company_id, search, department, cycle_type });
+      const { month, year, office_id, company_id, search, department, cycle_type, cycle } = req.query;
+      const activeCycle = cycle_type || cycle || 'payroll';
+      const result = await attendanceService.getAllMonthlyAttendance({ month, year, office_id, company_id, search, department, cycle_type: activeCycle });
       return success(res, 'Monthly attendance grid fetched', result, 200);
     } catch (err) {
       logger.error(`Get all monthly attendance error: ${err.message}`);

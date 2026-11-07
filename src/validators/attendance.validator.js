@@ -60,6 +60,7 @@ const adminMonthlyQuerySchema = Joi.object({
   year: Joi.number().integer().min(2020).max(2030).optional(),
   department: Joi.string().allow('', null).optional(),
   cycle_type: Joi.string().valid('payroll', 'calendar').optional(),
+  cycle: Joi.string().valid('payroll', 'calendar').optional(),
 });
 
 const manualEntrySchema = Joi.object({
