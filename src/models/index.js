@@ -152,13 +152,14 @@ TourExpense.belongsTo(Employee, { foreignKey: 'approved_by', as: 'approver' });
 Employee.hasMany(TourExpense, { foreignKey: 'approved_by', as: 'approvedTourExpenses' });
 
 // Employee → Tour (employee on tour)
-Employee.hasMany(Tour, { foreignKey: 'employee_id', as: 'tours' });
-Tour.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
+Employee.hasMany(Tour, { foreignKey: { name: 'employee_id', allowNull: false }, as: 'tours', onDelete: 'CASCADE' });
+Tour.belongsTo(Employee, { foreignKey: { name: 'employee_id', allowNull: false }, as: 'employee', onDelete: 'CASCADE' });
 // Tour → Employee (creator / admin who assigned the tour)
-Tour.belongsTo(Employee, { foreignKey: 'created_by', as: 'creator' });
-Employee.hasMany(Tour, { foreignKey: 'created_by', as: 'createdTours' });
+Tour.belongsTo(Employee, { foreignKey: { name: 'created_by', allowNull: true }, as: 'creator', onDelete: 'SET NULL' });
+Employee.hasMany(Tour, { foreignKey: { name: 'created_by', allowNull: true }, as: 'createdTours', onDelete: 'SET NULL' });
 // Tour → Employee (canceller)
-Tour.belongsTo(Employee, { foreignKey: 'cancelled_by', as: 'canceller' });
+Tour.belongsTo(Employee, { foreignKey: { name: 'cancelled_by', allowNull: true }, as: 'canceller', onDelete: 'SET NULL' });
+Employee.hasMany(Tour, { foreignKey: { name: 'cancelled_by', allowNull: true }, as: 'cancelledTours', onDelete: 'SET NULL' });
 
 // OnboardingInvitation associations
 const OnboardingInvitation = require('./onboarding_invitation.model');

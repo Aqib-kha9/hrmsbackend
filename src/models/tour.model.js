@@ -69,12 +69,14 @@ const Tour = sequelize.define('Tour', {
     type: DataTypes.INTEGER,
     allowNull: true,
     references: { model: 'employees', key: 'id' },
+    onDelete: 'SET NULL',
     comment: 'Admin/HR who created the tour',
   },
   cancelled_by: {
     type: DataTypes.INTEGER,
     allowNull: true,
     references: { model: 'employees', key: 'id' },
+    onDelete: 'SET NULL',
   },
   cancelled_at: {
     type: DataTypes.DATE,

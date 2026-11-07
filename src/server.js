@@ -80,7 +80,7 @@ async function startServer() {
       logger.warn('Column auto-migration check warning:', colCheckErr.message);
     }
 
-    // Auto-fix schema constraints & nullability (e.g. employee_id on letters for candidate offers)
+    // Auto-fix schema constraints & nullability (e.g. employee_id on letters, created_by/cancelled_by on tours)
     try {
       const [colInfo] = await sequelize.query(`
         SELECT is_nullable 
@@ -95,11 +95,29 @@ async function startServer() {
       // Table will be created by sequelize.sync if it does not exist
     }
 
+    try {
+      await sequelize.query('ALTER TABLE `tours` MODIFY COLUMN `created_by` INT NULL;');
+    } catch (e) {
+      // Table or column may not exist yet
+    }
+
+    try {
+      await sequelize.query('ALTER TABLE `tours` MODIFY COLUMN `cancelled_by` INT NULL;');
+    } catch (e) {
+      // Table or column may not exist yet
+    }
+
     // Sync models (alter: true adds missing columns without data loss)
     const forceSync = process.env.DB_SYNC_FORCE === 'true';
     const alterSync = process.env.DB_SYNC_ALTER === 'true';
-    await sequelize.sync({ force: forceSync, alter: alterSync });
-    logger.info(`✅ Database models synced (force: ${forceSync}, alter: ${alterSync})`);
+    try {
+      await sequelize.sync({ force: forceSync, alter: alterSync });
+      logger.info(`✅ Database models synced (force: ${forceSync}, alter: ${alterSync})`);
+    } catch (syncErr) {
+      logger.warn(`⚠️ sequelize.sync with alter=${alterSync} failed: ${syncErr.message}. Falling back to safe sync()...`);
+      await sequelize.sync();
+      logger.info('✅ Database models synced with safe sync() fallback');
+    }
 
     // Ensure RBAC system roles and permissions exist
     try {
