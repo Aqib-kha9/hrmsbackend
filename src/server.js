@@ -82,7 +82,15 @@ async function startServer() {
 
     // Auto-fix schema constraints & nullability (e.g. employee_id on letters for candidate offers)
     try {
-      await sequelize.query('ALTER TABLE `letters` MODIFY COLUMN `employee_id` INT NULL;');
+      const [colInfo] = await sequelize.query(`
+        SELECT is_nullable 
+        FROM information_schema.columns 
+        WHERE table_schema = DATABASE() AND table_name = 'letters' AND column_name = 'employee_id'
+      `);
+      const isNullable = colInfo.length > 0 && (colInfo[0].is_nullable || colInfo[0].IS_NULLABLE);
+      if (colInfo.length > 0 && isNullable !== 'YES') {
+        await sequelize.query('ALTER TABLE `letters` MODIFY COLUMN `employee_id` INT NULL;');
+      }
     } catch (e) {
       // Table will be created by sequelize.sync if it does not exist
     }

@@ -169,115 +169,128 @@ class EmployeeService {
     const employee = await Employee.findByPk(employeeId);
     if (!employee) throw new AppError('Employee not found', 404);
 
-    const t = await sequelize.transaction();
-    try {
-      // 1. Delete direct child records
-      await AttendanceRecord.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await MonthlyAttendance.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await LeaveBalance.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await LeaveRequest.destroy({ where: { employee_id: employeeId }, transaction: t });
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const t = await sequelize.transaction();
+      try {
+        // 1. Delete direct child records
+        await AttendanceRecord.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await MonthlyAttendance.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await LeaveBalance.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await LeaveRequest.destroy({ where: { employee_id: employeeId }, transaction: t });
 
-      // 2. Payslips & Salary Components (fetch IDs first to prevent 'Subquery returns more than 1 row' error)
-      const payslips = await Payslip.findAll({
-        attributes: ['id'],
-        where: { employee_id: employeeId },
-        transaction: t,
-      });
-      const payslipIds = payslips.map((p) => p.id);
-      if (payslipIds.length > 0) {
-        await SalaryComponent.destroy({
-          where: { payslip_id: { [Op.in]: payslipIds } },
+        // 2. Payslips & Salary Components (fetch IDs first to prevent 'Subquery returns more than 1 row' error)
+        const payslips = await Payslip.findAll({
+          attributes: ['id'],
+          where: { employee_id: employeeId },
           transaction: t,
         });
-      }
-      await Payslip.destroy({ where: { employee_id: employeeId }, transaction: t });
+        const payslipIds = payslips.map((p) => p.id);
+        if (payslipIds.length > 0) {
+          await SalaryComponent.destroy({
+            where: { payslip_id: { [Op.in]: payslipIds } },
+            transaction: t,
+          });
+        }
+        await Payslip.destroy({ where: { employee_id: employeeId }, transaction: t });
 
-      // 3. Loans & Loan Payments (fetch IDs first)
-      const loans = await Loan.findAll({
-        attributes: ['id'],
-        where: { employee_id: employeeId },
-        transaction: t,
-      });
-      const loanIds = loans.map((l) => l.id);
-      if (loanIds.length > 0) {
-        await LoanPayment.destroy({
-          where: { loan_id: { [Op.in]: loanIds } },
+        // 3. Loans & Loan Payments (fetch IDs first)
+        const loans = await Loan.findAll({
+          attributes: ['id'],
+          where: { employee_id: employeeId },
           transaction: t,
         });
+        const loanIds = loans.map((l) => l.id);
+        if (loanIds.length > 0) {
+          await LoanPayment.destroy({
+            where: { loan_id: { [Op.in]: loanIds } },
+            transaction: t,
+          });
+        }
+        await Loan.destroy({ where: { employee_id: employeeId }, transaction: t });
+
+        // 4. Other employee-owned records
+        await PayrollEntry.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await PerformanceObjective.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await PerformanceReview.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await Document.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await Letter.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await Notification.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await SalaryRevision.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await SalaryStructure.destroy({ where: { employee_id: employeeId }, transaction: t, force: true });
+        await TourExpense.destroy({ where: { employee_id: employeeId }, transaction: t });
+        await Tour.destroy({ where: { employee_id: employeeId }, transaction: t });
+
+        // 5. Nullify foreign key references where this employee acted as an approver/author/manager
+        await AttendanceRecord.update(
+          { marked_by_id: null },
+          { where: { marked_by_id: employeeId }, transaction: t }
+        );
+        await LeaveRequest.update(
+          { approved_by: null },
+          { where: { approved_by: employeeId }, transaction: t }
+        );
+        await Loan.update(
+          { approved_by: null },
+          { where: { approved_by: employeeId }, transaction: t }
+        );
+        await PerformanceReview.update(
+          { reviewed_by: null },
+          { where: { reviewed_by: employeeId }, transaction: t }
+        );
+        await SalaryRevision.update(
+          { approved_by: null },
+          { where: { approved_by: employeeId }, transaction: t }
+        );
+        await Letter.update(
+          { issued_by: null },
+          { where: { issued_by: employeeId }, transaction: t }
+        );
+        await Tour.update(
+          { created_by: null },
+          { where: { created_by: employeeId }, transaction: t }
+        );
+        await Tour.update(
+          { cancelled_by: null },
+          { where: { cancelled_by: employeeId }, transaction: t }
+        );
+        await TourExpense.update(
+          { approved_by: null },
+          { where: { approved_by: employeeId }, transaction: t }
+        );
+        await PayrollCycle.update(
+          { paid_by: null },
+          { where: { paid_by: employeeId }, transaction: t }
+        );
+        await OnboardingInvitation.update(
+          { created_by: null },
+          { where: { created_by: employeeId }, transaction: t }
+        );
+        await OnboardingInvitation.update(
+          { approved_by: null },
+          { where: { approved_by: employeeId }, transaction: t }
+        );
+
+        // 6. Finally, delete the employee
+        await employee.destroy({ transaction: t });
+        await t.commit();
+        logger.info(`Employee ${employee.emp_code} (ID: ${employeeId}) permanently deleted`);
+        return { id: employeeId, emp_code: employee.emp_code, name: employee.name };
+      } catch (err) {
+        await t.rollback();
+        const isTableDefChange =
+          (err.parent && (err.parent.errno === 1412 || err.parent.errno === 1615)) ||
+          (err.message && err.message.includes('Table definition has changed'));
+
+        if (isTableDefChange && attempt < maxRetries) {
+          logger.warn(`Table definition changed during deleteEmployee (${employeeId}). Retrying attempt ${attempt + 1}/${maxRetries}...`);
+          await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+          continue;
+        }
+
+        logger.error(`Delete employee ${employeeId} error: ${err.message}`);
+        throw err;
       }
-      await Loan.destroy({ where: { employee_id: employeeId }, transaction: t });
-
-      // 4. Other employee-owned records
-      await PayrollEntry.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await PerformanceObjective.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await PerformanceReview.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await Document.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await Letter.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await Notification.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await SalaryRevision.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await SalaryStructure.destroy({ where: { employee_id: employeeId }, transaction: t, force: true });
-      await TourExpense.destroy({ where: { employee_id: employeeId }, transaction: t });
-      await Tour.destroy({ where: { employee_id: employeeId }, transaction: t });
-
-      // 5. Nullify foreign key references where this employee acted as an approver/author/manager
-      await AttendanceRecord.update(
-        { marked_by_id: null },
-        { where: { marked_by_id: employeeId }, transaction: t }
-      );
-      await LeaveRequest.update(
-        { approved_by: null },
-        { where: { approved_by: employeeId }, transaction: t }
-      );
-      await Loan.update(
-        { approved_by: null },
-        { where: { approved_by: employeeId }, transaction: t }
-      );
-      await PerformanceReview.update(
-        { reviewed_by: null },
-        { where: { reviewed_by: employeeId }, transaction: t }
-      );
-      await SalaryRevision.update(
-        { approved_by: null },
-        { where: { approved_by: employeeId }, transaction: t }
-      );
-      await Letter.update(
-        { issued_by: null },
-        { where: { issued_by: employeeId }, transaction: t }
-      );
-      await Tour.update(
-        { created_by: null },
-        { where: { created_by: employeeId }, transaction: t }
-      );
-      await Tour.update(
-        { cancelled_by: null },
-        { where: { cancelled_by: employeeId }, transaction: t }
-      );
-      await TourExpense.update(
-        { approved_by: null },
-        { where: { approved_by: employeeId }, transaction: t }
-      );
-      await PayrollCycle.update(
-        { paid_by: null },
-        { where: { paid_by: employeeId }, transaction: t }
-      );
-      await OnboardingInvitation.update(
-        { created_by: null },
-        { where: { created_by: employeeId }, transaction: t }
-      );
-      await OnboardingInvitation.update(
-        { approved_by: null },
-        { where: { approved_by: employeeId }, transaction: t }
-      );
-
-      // 6. Finally, delete the employee
-      await employee.destroy({ transaction: t });
-      await t.commit();
-      logger.info(`Employee ${employee.emp_code} (ID: ${employeeId}) permanently deleted`);
-      return { id: employeeId, emp_code: employee.emp_code, name: employee.name };
-    } catch (err) {
-      await t.rollback();
-      logger.error(`Delete employee ${employeeId} error: ${err.message}`);
-      throw err;
     }
   }
 
