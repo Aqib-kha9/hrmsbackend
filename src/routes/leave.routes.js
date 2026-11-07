@@ -20,6 +20,7 @@ router.patch('/cancel/:id', leaveController.cancelLeaveRequest);
 router.get('/requests', requirePermission('leave:read'), validate(leaveQuerySchema, 'query'), leaveController.getAllLeaveRequests);
 router.get('/history/:employeeId', requirePermission('leave:read'), leaveController.getEmployeeLeaveHistory);
 router.patch('/approve/:id', requirePermission('leave:approve'), validate(approveLeaveSchema), leaveController.approveLeaveRequest);
+router.patch('/:id/payroll-treatment', requirePermission('leave:approve'), leaveController.updateLeavePayrollTreatment);
 router.get('/team', requirePermission('leave:read'), leaveController.getTeamLeaves);
 
 // Admin-only: grant extra leaves

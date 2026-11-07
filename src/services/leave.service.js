@@ -354,6 +354,14 @@ class LeaveService {
       }
     }
 
+    // Sync monthly attendance immediately (Req 10)
+    try {
+      const attendanceService = require('./attendance.service');
+      await attendanceService._updateMonthlyAttendance(request.employee_id, request.from_date);
+    } catch (attErr) {
+      logger.error(`Failed to update monthly attendance on leave action: ${attErr.message}`);
+    }
+
     // Trigger Notification
     try {
       const fromFormatted = new Date(request.from_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -377,6 +385,85 @@ class LeaveService {
     }
 
     logger.info(`Leave request ${requestId} ${action} by ${approvedBy} with treatment: ${treatment}`);
+    return request;
+  }
+
+  /**
+   * Update or override payroll treatment for an existing leave request (Req 10).
+   * Provides Admin/Owner with final control over:
+   * - Paid vs Unpaid treatment
+   * - Leave balance adjustment vs Salary deduction
+   * - Current-month vs Future-month adjustment
+   */
+  async updateLeavePayrollTreatment(requestId, { payroll_treatment, remarks, is_paid, updatedBy }) {
+    const request = await LeaveRequest.findByPk(requestId);
+    if (!request) throw new AppError('Leave request not found', 404);
+
+    const validTreatments = ['paid', 'unpaid', 'adjusted_balance', 'deducted_current', 'carry_forward_next'];
+    if (!validTreatments.includes(payroll_treatment)) {
+      throw new AppError(`Invalid payroll treatment: ${payroll_treatment}. Valid choices: ${validTreatments.join(', ')}`, 400);
+    }
+
+    const prevTreatment = request.payroll_treatment;
+    const prevIsPaid = request.is_paid;
+    const duration = Number(request.duration) || 1;
+    const finalIsPaid = is_paid !== undefined ? Boolean(is_paid) : (payroll_treatment !== 'unpaid' && payroll_treatment !== 'deducted_current');
+
+    // Balance adjustments if transitioning between paid/adjusted_balance and unpaid
+    const balance = await this._ensureAnnualBalance(request.employee_id);
+    const wasDeductedFromBalance = prevTreatment === 'adjusted_balance' || (prevTreatment === 'paid' && prevIsPaid);
+    const nowDeductsFromBalance = payroll_treatment === 'adjusted_balance' || (payroll_treatment === 'paid' && finalIsPaid);
+
+    if (wasDeductedFromBalance && !nowDeductsFromBalance) {
+      // Refund balance
+      if (request.leave_type === 'cl') {
+        await balance.update({
+          cl_used: Math.max(0, Number(balance.cl_used || 0) - duration),
+          used: Math.max(0, Number(balance.used || 0) - duration),
+          available: Number(balance.available || 0) + duration,
+        });
+      } else if (request.leave_type === 'el') {
+        await balance.update({
+          el_used: Math.max(0, Number(balance.el_used || 0) - duration),
+          used: Math.max(0, Number(balance.used || 0) - duration),
+          available: Number(balance.available || 0) + duration,
+        });
+      }
+    } else if (!wasDeductedFromBalance && nowDeductsFromBalance) {
+      // Consume from balance
+      if (request.leave_type === 'cl') {
+        await balance.update({
+          cl_used: Number(balance.cl_used || 0) + duration,
+          used: Number(balance.used || 0) + duration,
+          available: Math.max(0, Number(balance.available || 0) - duration),
+        });
+      } else if (request.leave_type === 'el') {
+        await balance.update({
+          el_used: Number(balance.el_used || 0) + duration,
+          used: Number(balance.used || 0) + duration,
+          available: Math.max(0, Number(balance.available || 0) - duration),
+        });
+      }
+    }
+
+    const updateData = {
+      payroll_treatment,
+      is_paid: finalIsPaid,
+    };
+    if (remarks) {
+      updateData.remarks = remarks;
+    }
+    await request.update(updateData);
+
+    // Sync monthly attendance immediately
+    try {
+      const attendanceService = require('./attendance.service');
+      await attendanceService._updateMonthlyAttendance(request.employee_id, request.from_date);
+    } catch (attErr) {
+      logger.error(`Failed to update monthly attendance on treatment update: ${attErr.message}`);
+    }
+
+    logger.info(`Leave request ${requestId} payroll treatment updated to ${payroll_treatment} by admin ${updatedBy}`);
     return request;
   }
 

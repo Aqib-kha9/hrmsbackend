@@ -210,11 +210,29 @@ class PayrollLedgerService {
     }
 
     // Sync absent days from MonthlyAttendance (source of truth) + add elapsed-day pro-rating
-    const { MonthlyAttendance, Loan } = require('../models');
+    const { MonthlyAttendance, Loan, LeaveRequest } = require('../models');
     const monthlyStats = await MonthlyAttendance.findAll({
       where: { month: currentMonth + 1, year: currentYear },
     });
     const monthlyMap = new Map(monthlyStats.map(m => [m.employee_id, m]));
+
+    // Pre-fetch leaves overlapping this cycle period to provide transparency in payroll (Req 10)
+    const prevMonthForCycle = currentMonth === 0 ? 12 : currentMonth;
+    const prevYearForCycle = currentMonth === 0 ? currentYear - 1 : currentYear;
+    const cycleStartStr = `${prevYearForCycle}-${String(prevMonthForCycle).padStart(2, '0')}-26`;
+    const cycleEndStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-25`;
+
+    const cycleLeaves = await LeaveRequest.findAll({
+      where: {
+        from_date: { [Op.lte]: cycleEndStr },
+        to_date: { [Op.gte]: cycleStartStr },
+      },
+    });
+    const cycleLeaveMap = new Map();
+    cycleLeaves.forEach(l => {
+      if (!cycleLeaveMap.has(l.employee_id)) cycleLeaveMap.set(l.employee_id, []);
+      cycleLeaveMap.get(l.employee_id).push(l);
+    });
 
     // Sync active loan EMIs
     const activeLoans = await Loan.findAll({ where: { status: 'active' } });
@@ -248,6 +266,7 @@ class PayrollLedgerService {
         esic_applicable: emp.esic_applicable,
         pt_applicable: ptApplicable,
         absent_days: absentDays,
+        cycle_leaves: cycleLeaveMap.get(emp.id) || [],
       };
 
       // 1. Prorated calculation (Till Today)
@@ -1067,6 +1086,19 @@ class PayrollLedgerService {
           prevCarryMap.set(pEntry.employee_id, carry);
         }
       }
+    }
+
+    // Also include any LeaveRequests designated with 'carry_forward_next' treatment (Req 10)
+    const { LeaveRequest: LRModel } = require('../models');
+    const carriedLeaves = await LRModel.findAll({
+      where: {
+        status: 'approved',
+        payroll_treatment: 'carry_forward_next',
+      }
+    });
+    for (const l of carriedLeaves) {
+      const cur = prevCarryMap.get(l.employee_id) || 0;
+      prevCarryMap.set(l.employee_id, cur + (Number(l.duration) || 1));
     }
 
     const entries = employees.map(emp => {

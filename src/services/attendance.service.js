@@ -654,17 +654,17 @@ class AttendanceService {
     const holidays = await getHolidaysInMonth(currentYear, currentMonth);
 
     const { LeaveRequest } = require('../models');
-    const approvedLeaves = await LeaveRequest.findAll({
+    const cycleLeaves = await LeaveRequest.findAll({
       where: {
         employee_id: employeeId,
-        status: 'approved',
+        status: { [Op.in]: ['approved', 'pending'] },
         from_date: { [Op.lte]: endDateStr },
         to_date: { [Op.gte]: startDateStr }
       }
     });
 
-    const isLeaveDate = (dateStr) => {
-      return approvedLeaves.some(l => dateStr >= l.from_date && dateStr <= l.to_date);
+    const getLeaveForDate = (dateStr) => {
+      return cycleLeaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
     };
 
     const localTodayStr = getLocalDateString(new Date());
@@ -682,6 +682,7 @@ class AttendanceService {
 
       const isHoliday = isHolidayDate(dateStr, holidays);
       const isWeekendDay = weekendDays.includes(dayOfWeek);
+      const activeLeave = getLeaveForDate(dateStr);
 
       const existing = recordMap.get(dateStr);
       if (existing) {
@@ -697,9 +698,20 @@ class AttendanceService {
           status = 'holiday';
           const h = holidays.find(h => dateStr >= h.start_date && dateStr <= h.end_date);
           remarks = h ? `Public Holiday: ${h.name}` : 'Public Holiday';
-        } else if (isLeaveDate(dateStr)) {
-          status = 'holiday'; // show as a holiday/paid off day
-          remarks = 'Approved Leave';
+        } else if (activeLeave) {
+          if (activeLeave.status === 'pending') {
+            // Req 10: Pending/unapproved leave does not automatically reduce salary
+            status = 'leave';
+            remarks = 'Pending Leave Request (Protected from salary deduction)';
+          } else if (activeLeave.payroll_treatment === 'unpaid' || (!activeLeave.is_paid && activeLeave.payroll_treatment !== 'paid')) {
+            // Explicit Admin-designated Loss of Pay (LWP)
+            status = 'absent';
+            remarks = 'Approved Leave (Loss of Pay / Unpaid)';
+          } else {
+            // Approved Paid / Adjusted Leave
+            status = 'holiday';
+            remarks = `Approved Leave (${(activeLeave.leave_type || 'EL').toUpperCase()}) - Paid`;
+          }
         }
 
         filledRecords.push({
@@ -1161,19 +1173,19 @@ class AttendanceService {
       }
     });
 
-    // Get approved leaves for all employees during this period
+    // Get all leaves (approved and pending) for employees during this period (Req 10)
     const { LeaveRequest } = require('../models');
-    const approvedLeaves = await LeaveRequest.findAll({
+    const allLeaves = await LeaveRequest.findAll({
       where: {
         employee_id: { [Op.in]: empIds },
-        status: 'approved',
+        status: { [Op.in]: ['approved', 'pending'] },
         from_date: { [Op.lte]: endDateStr },
         to_date: { [Op.gte]: startDateStr },
       },
     });
 
     const leaveMap = new Map();
-    approvedLeaves.forEach(l => {
+    allLeaves.forEach(l => {
       if (!leaveMap.has(l.employee_id)) leaveMap.set(l.employee_id, []);
       leaveMap.get(l.employee_id).push(l);
     });
@@ -1233,7 +1245,7 @@ class AttendanceService {
 
         const isHoliday = holidaysList.some(h => dateStr >= h.start_date && dateStr <= h.end_date);
         const isWeekendDay = weekendDaysGrid.includes(dayOfWeek);
-        const hasApprovedLeave = empLeaves.some(l => dateStr >= l.from_date && dateStr <= l.to_date);
+        const activeLeave = empLeaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
 
         const record = empRecords.get(dateStr);
         if (record) {
@@ -1258,8 +1270,20 @@ class AttendanceService {
           const isFutureDate = dObj > localToday;
           if (isFutureDate) {
             grid += '-';
-          } else if (hasApprovedLeave) {
-            grid += 'L'; leaveCount++;
+          } else if (activeLeave) {
+            if (activeLeave.status === 'pending') {
+              // Req 10: Pending/unapproved leave does not automatically reduce salary
+              grid += 'L';
+              leaveCount++;
+            } else if (activeLeave.payroll_treatment === 'unpaid' || (!activeLeave.is_paid && activeLeave.payroll_treatment !== 'paid')) {
+              // Explicit Admin-designated Loss of Pay (LWP)
+              grid += 'A';
+              absentCount++;
+            } else {
+              // Approved Paid / Adjusted Leave
+              grid += 'L';
+              leaveCount++;
+            }
           } else if (isHoliday) {
             grid += 'H'; holidayCount++;
           } else if (isWeekendDay) {
@@ -1483,19 +1507,34 @@ class AttendanceService {
     const weekendDays = await _getWeekendDays();
     const holidays = await getHolidaysInMonth(year, month);
 
-    // Fetch approved leaves overlapping the cycle
+    // Fetch leaves overlapping the cycle (both approved and pending) (Req 10)
     const { LeaveRequest } = require('../models');
-    const approvedLeaves = await LeaveRequest.findAll({
+    const cycleLeaves = await LeaveRequest.findAll({
       where: {
         employee_id: employeeId,
-        status: 'approved',
+        status: { [Op.in]: ['approved', 'pending'] },
         from_date: { [Op.lte]: cycleEnd },
         to_date: { [Op.gte]: cycleStart }
       }
     });
 
-    const isLeaveDate = (dStr) => {
-      return approvedLeaves.some(l => dStr >= l.from_date && dStr <= l.to_date);
+    // Explicit Admin-designated unpaid leaves (LWP)
+    const isUnpaidLeaveDate = (dStr) => {
+      return cycleLeaves.some(l =>
+        l.status === 'approved' &&
+        (l.payroll_treatment === 'unpaid' || (!l.is_paid && l.payroll_treatment !== 'paid')) &&
+        dStr >= l.from_date && dStr <= l.to_date
+      );
+    };
+
+    // Protected leaves: pending leaves (Req 10: unapproved leave does not reduce salary) OR approved paid/adjusted leaves
+    const isProtectedLeaveDate = (dStr) => {
+      return cycleLeaves.some(l => {
+        if (dStr < l.from_date || dStr > l.to_date) return false;
+        if (l.status === 'pending') return true; // Req 10: Pending unapproved leaves do NOT reduce salary
+        if (l.status === 'approved' && l.payroll_treatment !== 'unpaid') return true; // Paid or carry forward
+        return false;
+      });
     };
 
     // Calculate daily metrics by looping over every day in the cycle up to today
@@ -1536,11 +1575,14 @@ class AttendanceService {
           weekendDaysCount++;
         } else if (isHoliday) {
           holidayDaysCount++;
-        } else if (isLeaveDate(dateKey)) {
-          // Approved leave acts like holiday (paid day off, not absent)
+        } else if (isProtectedLeaveDate(dateKey)) {
+          // Protected from salary reduction (pending unapproved leave or approved paid leave)
           holidayDaysCount++;
+        } else if (isUnpaidLeaveDate(dateKey)) {
+          // Explicit Admin decision: unpaid leave (LWP)
+          absentDays++;
         } else {
-          // No record, no weekend, no holiday, no leave -> count as Absent
+          // No record, no weekend, no holiday, no leave -> Unexplained Absent
           absentDays++;
         }
       }

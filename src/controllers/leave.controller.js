@@ -89,6 +89,24 @@ class LeaveController {
     }
   }
 
+  async updateLeavePayrollTreatment(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { payroll_treatment, remarks, is_paid } = req.body;
+      const updatedBy = req.employee.id;
+      const result = await leaveService.updateLeavePayrollTreatment(id, {
+        payroll_treatment,
+        remarks,
+        is_paid,
+        updatedBy,
+      });
+      return success(res, 'Leave payroll treatment updated successfully', result, 200);
+    } catch (err) {
+      logger.error(`Update leave payroll treatment error: ${err.message}`);
+      return next(err);
+    }
+  }
+
   async getEmployeeLeaveHistory(req, res, next) {
     try {
       const { employeeId } = req.params;
