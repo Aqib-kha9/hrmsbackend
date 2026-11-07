@@ -156,7 +156,9 @@ class PayrollLedgerService {
     const totalMonthlyCTC = totalEarnings + pfEmployer + esiEmployer;
 
     return {
+      fixedGross, fixedBasic, fixedHra, fixedOther,
       basic, hra, other, proratedGross, totalEarnings,
+      payableDays,
       pf, esi, pt, grossDeductions, net,
       pfEmployer, esiEmployer, totalMonthlyCTC,
     };
@@ -611,7 +613,7 @@ class PayrollLedgerService {
 
   // ── API: POST /payroll/disburse — disburse the current cycle ──
 
-  async disburseCycle(cycleId, { mode, reference, authorizedBy, remarks }) {
+  async disburseCycle(cycleId, { mode, reference, authorizedBy, remarks, sendEmails = false }) {
     const cycle = await PayrollCycle.findByPk(cycleId);
     if (!cycle) throw new AppError('Payroll cycle not found', 404);
 
@@ -625,28 +627,120 @@ class PayrollLedgerService {
     });
 
     // Mark all entries as Paid
-    const entries = await PayrollEntry.findAll({ where: { cycle_id: cycleId } });
+    const entries = await PayrollEntry.findAll({
+      where: { cycle_id: cycleId },
+      include: [
+        {
+          model: Employee,
+          as: 'employee',
+          include: [
+            { model: Office, as: 'office' },
+            { model: Company, as: 'company' },
+          ],
+        },
+      ],
+    });
+
     await PayrollEntry.update(
       { status: 'Paid' },
       { where: { cycle_id: cycleId } },
     );
 
+    // ── Automatic Salary Slip Generation into Payslip Table (Req 3.1 & 3.2) ──
+    const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
+    const ptSlabs = await getPTSlabs();
+
+    for (const entry of entries) {
+      const emp = entry.employee;
+      if (!emp) continue;
+
+      const structure = await SalaryStructure.findOne({
+        where: { employee_id: emp.id },
+        order: [['effective_from', 'DESC']],
+      });
+
+      const row = {
+        fixed_gross: structure?.fixed_gross || emp.fixed_gross || 0,
+        pf_applicable: structure?.pf_applicable ?? emp.pf_applicable,
+        pf_ceiling: structure?.pf_ceiling ?? emp.pf_ceiling,
+        pf_contribution_mode: structure?.pf_contribution_mode || emp.pf_contribution_mode,
+        pf_employee_rate: structure?.pf_employee_rate ?? 0.12,
+        pf_employer_rate: structure?.pf_employer_rate ?? 0.12,
+        esic_applicable: structure?.esic_applicable ?? emp.esic_applicable,
+        esic_contribution_mode: structure?.esic_contribution_mode || emp.esic_contribution_mode,
+        esic_employee_rate: structure?.esic_employee_rate ?? 0.0075,
+        esic_employer_rate: structure?.esic_employer_rate ?? 0.0325,
+        pt_applicable: structure?.pt_applicable !== false,
+        absent_days: entry.absent_days,
+        leave_adjustment_days: entry.leave_adjustment_days,
+        leave_carry_forward_days: entry.leave_carry_forward_days,
+        manual_payable_days: entry.manual_payable_days,
+        bonus: entry.bonus,
+        previous_arrears: entry.previous_arrears,
+        incentive: entry.incentive,
+        loan_deduction: entry.loan_deduction,
+        other_deduction: entry.other_deduction,
+        conveyance: structure?.conveyance || 0,
+        medical_allowance: structure?.medical_allowance || 0,
+      };
+
+      const calc = this._calculateRow(row, dynamicDays, ptSlabs);
+
+      const musterDays = entry.total_muster_days || dynamicDays;
+      const payableDays = calc.payableDays;
+      const lopDays = entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0
+        ? Number(entry.lwp_days)
+        : Math.max(0, musterDays - payableDays);
+
+      await Payslip.upsert({
+        employee_id: emp.id,
+        month: cycle.month,
+        month_index: cycle.month_index + 1,
+        year: cycle.year,
+        basic_salary: calc.basic,
+        gross_salary: calc.totalEarnings,
+        net_salary: calc.net,
+        total_deductions: calc.grossDeductions,
+        pf_employee: calc.pf,
+        pf_employer: calc.pfEmployer,
+        esi_employee: calc.esi,
+        esi_employer: calc.esiEmployer,
+        professional_tax: calc.pt,
+        hra: calc.hra,
+        other_allowance: calc.other,
+        special_allowance: structure?.special_allowance || 0,
+        conveyance: structure?.conveyance || 0,
+        medical_allowance: structure?.medical_allowance || 0,
+        working_days: musterDays,
+        paid_days: payableDays,
+        lop_days: lopDays,
+        ctc: calc.totalMonthlyCTC,
+        status: 'paid',
+        paid_on: new Date(),
+      }).catch((e) => logger.warn(`Payslip upsert error for emp ${emp.id}: ${e.message}`));
+    }
+
     // Send notifications to all employees in this cycle
     const cycleText = `${cycle.month} ${cycle.year}`;
     for (const entry of entries) {
-      if (entry.status !== 'Paid') { // Only notify if it wasn't already paid
-        await notificationService.createNotification(
-          entry.employee_id,
-          'Salary Disbursed',
-          `Your salary for ${cycleText} has been successfully disbursed.`,
-          'success',
-          'payroll',
-          '/payroll/payslips'
-        ).catch(e => logger.error(`Failed to send notification for emp ${entry.employee_id}: ${e.message}`));
-      }
+      await notificationService.createNotification(
+        entry.employee_id,
+        'Salary Disbursed',
+        `Your salary for ${cycleText} has been successfully disbursed. Your salary slip is now ready for download.`,
+        'success',
+        'payroll',
+        '/payroll/payslips'
+      ).catch((e) => logger.error(`Failed to send notification for emp ${entry.employee_id}: ${e.message}`));
     }
 
-    logger.info(`Disbursed payroll cycle ${cycleId} (${cycle.month} ${cycle.year})`);
+    // If sendEmails is requested, batch dispatch salary slips
+    if (sendEmails) {
+      this.sendAllCyclePayslips(cycleId).catch((e) =>
+        logger.error(`Automatic payslip email dispatch error for cycle ${cycleId}: ${e.message}`)
+      );
+    }
+
+    logger.info(`Disbursed payroll cycle ${cycleId} (${cycle.month} ${cycle.year}) and generated all employee payslips`);
     return cycle;
   }
 
@@ -721,10 +815,15 @@ class PayrollLedgerService {
       bank_name: emp.bank_name,
       bank_account_number: emp.bank_account_number,
       // Attendance (Req 3.2)
-      total_muster_days: dynamicDays,
-      present_days: entry.present_days || calc.payableDays,
+      total_muster_days: entry.total_muster_days || dynamicDays,
+      present_days: entry.present_days !== undefined && entry.present_days !== null && Number(entry.present_days) > 0 ? Number(entry.present_days) : calc.payableDays,
       payable_days: calc.payableDays,
-      lwp_days: Math.max(0, dynamicDays - calc.payableDays),
+      lwp_days: entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0 ? Number(entry.lwp_days) : Math.max(0, dynamicDays - calc.payableDays),
+      // Standard / Fixed Structure (Req 3.3)
+      fixed_gross: calc.fixedGross,
+      fixed_basic: calc.fixedBasic,
+      fixed_hra: calc.fixedHra,
+      fixed_other: calc.fixedOther,
       // Earnings & Deductions (Req 3.3)
       basic_salary: calc.basic,
       hra: calc.hra,

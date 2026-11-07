@@ -68,12 +68,13 @@ class PayrollLedgerController {
   async disburseCycle(req, res, next) {
     try {
       const { cycleId } = req.params;
-      const { mode, reference, authorizedBy, remarks } = req.body;
+      const { mode, reference, authorizedBy, remarks, sendEmails } = req.body;
       const result = await payrollLedgerService.disburseCycle(cycleId, {
         mode,
         reference,
         authorizedBy,
         remarks,
+        sendEmails: Boolean(sendEmails),
       });
       return success(res, 'Cycle disbursed successfully', result, 200);
     } catch (err) {

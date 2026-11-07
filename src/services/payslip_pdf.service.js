@@ -134,29 +134,43 @@ class PayslipPdfService {
         const tableTop = y;
         const tableWidth = 523;
         const halfWidth = tableWidth / 2;
+        const hasStandard = Boolean(payslipData.fixed_gross && Number(payslipData.fixed_gross) > 0);
 
         // Table Header
         doc.rect(36, tableTop, halfWidth, 20).fill('#e2e8f0');
         doc.rect(36, tableTop, halfWidth, 20).stroke(borderColor);
-        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(9).text('EARNINGS', 46, tableTop + 6);
-        doc.text('AMOUNT (INR)', 36 + halfWidth - 95, tableTop + 6, { align: 'right', width: 85 });
+        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(8.5);
+
+        if (hasStandard) {
+          doc.text('EARNINGS', 44, tableTop + 6);
+          doc.text('STANDARD', 145, tableTop + 6, { align: 'right', width: 65 });
+          doc.text('EARNED (INR)', 215, tableTop + 6, { align: 'right', width: 75 });
+        } else {
+          doc.text('EARNINGS', 46, tableTop + 6);
+          doc.text('EARNED AMOUNT (INR)', 36 + halfWidth - 120, tableTop + 6, { align: 'right', width: 110 });
+        }
 
         doc.rect(36 + halfWidth, tableTop, halfWidth, 20).fill('#e2e8f0');
         doc.rect(36 + halfWidth, tableTop, halfWidth, 20).stroke(borderColor);
-        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(9).text('DEDUCTIONS', 36 + halfWidth + 10, tableTop + 6);
+        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(8.5).text('DEDUCTIONS', 36 + halfWidth + 10, tableTop + 6);
         doc.text('AMOUNT (INR)', 36 + tableWidth - 95, tableTop + 6, { align: 'right', width: 85 });
 
         // Items
+        const fixedGross = Number(payslipData.fixed_gross) || 0;
+        const fixedBasic = payslipData.fixed_basic || (hasStandard ? Math.round(fixedGross * 0.40) : null);
+        const fixedHra = payslipData.fixed_hra || (hasStandard ? Math.round(fixedBasic * 0.40) : null);
+        const fixedOther = payslipData.fixed_other || (hasStandard ? (fixedGross - fixedBasic - fixedHra) : null);
+
         const earnings = [
-          { name: 'Basic Salary', amount: payslipData.basic_salary || 0 },
-          { name: 'House Rent Allowance (HRA)', amount: payslipData.hra || 0 },
-          { name: 'Special / Other Allowance', amount: payslipData.other_allowance || payslipData.special_allowance || 0 },
+          { name: 'Basic Salary', standard: fixedBasic, amount: payslipData.basic_salary || 0 },
+          { name: 'House Rent Allowance (HRA)', standard: fixedHra, amount: payslipData.hra || 0 },
+          { name: 'Special / Other Allowance', standard: fixedOther, amount: payslipData.other_allowance || payslipData.special_allowance || 0 },
         ];
-        if (payslipData.conveyance > 0) earnings.push({ name: 'Conveyance Allowance', amount: payslipData.conveyance });
-        if (payslipData.medical_allowance > 0) earnings.push({ name: 'Medical Allowance', amount: payslipData.medical_allowance });
-        if (payslipData.bonus > 0) earnings.push({ name: 'Performance Bonus', amount: payslipData.bonus });
-        if (payslipData.incentive > 0) earnings.push({ name: 'Incentive', amount: payslipData.incentive });
-        if (payslipData.previous_arrears > 0) earnings.push({ name: 'Arrears', amount: payslipData.previous_arrears });
+        if (payslipData.conveyance > 0) earnings.push({ name: 'Conveyance Allowance', standard: null, amount: payslipData.conveyance });
+        if (payslipData.medical_allowance > 0) earnings.push({ name: 'Medical Allowance', standard: null, amount: payslipData.medical_allowance });
+        if (payslipData.bonus > 0) earnings.push({ name: 'Performance Bonus', standard: null, amount: payslipData.bonus });
+        if (payslipData.incentive > 0) earnings.push({ name: 'Incentive', standard: null, amount: payslipData.incentive });
+        if (payslipData.previous_arrears > 0) earnings.push({ name: 'Arrears', standard: null, amount: payslipData.previous_arrears });
 
         const deductions = [];
         if (payslipData.pf_employee > 0) deductions.push({ name: 'Provident Fund (PF - Employee)', amount: payslipData.pf_employee });
@@ -177,11 +191,18 @@ class PayslipPdfService {
           doc.rect(36 + halfWidth, rowY, halfWidth, 18).stroke(borderColor);
 
           if (earnItem) {
-            doc.fillColor(textColor).text(earnItem.name, 46, rowY + 5);
-            doc.text(Number(earnItem.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 36 + halfWidth - 95, rowY + 5, { align: 'right', width: 85 });
+            doc.fillColor(textColor);
+            if (hasStandard) {
+              doc.text(earnItem.name, 44, rowY + 5, { width: 105 });
+              doc.text(earnItem.standard != null ? Number(earnItem.standard).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '-', 145, rowY + 5, { align: 'right', width: 65 });
+              doc.text(Number(earnItem.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 215, rowY + 5, { align: 'right', width: 75 });
+            } else {
+              doc.text(earnItem.name, 46, rowY + 5, { width: 140 });
+              doc.text(Number(earnItem.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 36 + halfWidth - 95, rowY + 5, { align: 'right', width: 85 });
+            }
           }
           if (dedItem) {
-            doc.fillColor(textColor).text(dedItem.name, 36 + halfWidth + 10, rowY + 5);
+            doc.fillColor(textColor).text(dedItem.name, 36 + halfWidth + 10, rowY + 5, { width: 145 });
             doc.text(Number(dedItem.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 36 + tableWidth - 95, rowY + 5, { align: 'right', width: 85 });
           }
 
@@ -194,12 +215,20 @@ class PayslipPdfService {
 
         doc.rect(36, rowY, halfWidth, 22).fill('#f8fafc');
         doc.rect(36, rowY, halfWidth, 22).stroke(borderColor);
-        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(9).text('Gross Earnings:', 46, rowY + 6);
-        doc.text(formatCurr(totalEarnings), 36 + halfWidth - 110, rowY + 6, { align: 'right', width: 100 });
+        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(8.5);
+
+        if (hasStandard) {
+          doc.text('Gross Earnings:', 44, rowY + 6);
+          doc.text(Number(fixedGross).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 145, rowY + 6, { align: 'right', width: 65 });
+          doc.text(Number(totalEarnings).toLocaleString('en-IN', { minimumFractionDigits: 2 }), 215, rowY + 6, { align: 'right', width: 75 });
+        } else {
+          doc.text('Gross Earnings:', 46, rowY + 6);
+          doc.text(formatCurr(totalEarnings), 36 + halfWidth - 110, rowY + 6, { align: 'right', width: 100 });
+        }
 
         doc.rect(36 + halfWidth, rowY, halfWidth, 22).fill('#f8fafc');
         doc.rect(36 + halfWidth, rowY, halfWidth, 22).stroke(borderColor);
-        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(9).text('Total Deductions:', 36 + halfWidth + 10, rowY + 6);
+        doc.fillColor(primaryColor).font('Helvetica-Bold').fontSize(8.5).text('Total Deductions:', 36 + halfWidth + 10, rowY + 6);
         doc.text(formatCurr(totalDeductions), 36 + tableWidth - 110, rowY + 6, { align: 'right', width: 100 });
 
         rowY += 32;

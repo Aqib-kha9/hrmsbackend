@@ -36,6 +36,7 @@ const disburseSchema = Joi.object({
   reference: Joi.string().max(100).optional().allow(''),
   authorizedBy: Joi.string().max(100).required(),
   remarks: Joi.string().max(500).optional().allow(''),
+  sendEmails: Joi.boolean().optional(),
 });
 
 const historyQuerySchema = Joi.object({
