@@ -14,7 +14,7 @@ class LetterPdfService {
    * @param {string} params.title - Letter title
    * @param {string} params.type - Letter type
    */
-  async generateLetterPDF({ content, fullHtml, employee, title, type }) {
+  async generateLetterPDF({ content, fullHtml, employee, title, type, signatory }) {
     if (fullHtml) {
       try {
         const puppeteer = require('puppeteer');
@@ -31,6 +31,7 @@ class LetterPdfService {
             <head>
               <meta charset="UTF-8">
               <style>
+                @page { size: A4; margin: 0; }
                 body { margin: 0; padding: 0; display: flex; justify-content: center; background: #fff; }
                 * { box-sizing: border-box; }
               </style>
@@ -140,6 +141,27 @@ class LetterPdfService {
           });
           doc.moveDown(0.15);
         }
+
+        // ── SIGNATURE BLOCK ──
+        if (doc.y > 640) {
+          doc.addPage();
+        }
+        doc.moveDown(1.5);
+        const sigY = doc.y;
+
+        // Left: Authorised Signatory
+        const leftX = 60;
+        doc.moveTo(leftX, sigY).lineTo(leftX + 150, sigY).strokeColor('#0f172a').lineWidth(1.2).stroke();
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#0f172a').text(signatory?.name ? signatory.name.toUpperCase() : 'AUTHORISED SIGNATORY', leftX, sigY + 6);
+        doc.fontSize(8).font('Helvetica').fillColor('#475569').text(signatory?.designation || 'Human Resources', leftX, sigY + 18);
+        doc.fontSize(7.5).font('Helvetica-Oblique').fillColor('#64748b').text(`For ${companyName}`, leftX, sigY + 28);
+
+        // Right: Employee Acceptance Signature
+        const rightX = 350;
+        doc.moveTo(rightX, sigY).lineTo(rightX + 150, sigY).strokeColor('#0f172a').lineWidth(1.2).stroke();
+        doc.fontSize(9).font('Helvetica-Bold').fillColor('#0f172a').text('CANDIDATE / EMPLOYEE', rightX, sigY + 6);
+        doc.fontSize(8).font('Helvetica').fillColor('#475569').text(employee.name || 'Acceptance Signature', rightX, sigY + 18);
+        doc.fontSize(7.5).font('Helvetica-Oblique').fillColor('#64748b').text('Acknowledged & Accepted', rightX, sigY + 28);
 
         // ── FOOTER ──
         const totalPages = doc.bufferedPageRange().count;

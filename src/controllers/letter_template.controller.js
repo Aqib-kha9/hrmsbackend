@@ -71,7 +71,8 @@ class LetterTemplateController {
   async previewTemplate(req, res, next) {
     try {
       const params = req.method === 'GET' ? req.query : req.body;
-      const { templateId, employeeId, candidateData } = params;
+      const { templateId, employeeId, candidateData, signatoryId, signatory_id } = params;
+      const resolvedSignatoryId = signatoryId || signatory_id || null;
       
       if (!templateId) {
         return res.status(400).json({ success: false, message: 'templateId is required' });
@@ -80,7 +81,7 @@ class LetterTemplateController {
         return res.status(400).json({ success: false, message: 'Either employeeId or candidateData is required' });
       }
       
-      const preview = await letterTemplateService.previewTemplate(templateId, employeeId, candidateData);
+      const preview = await letterTemplateService.previewTemplate(templateId, employeeId, candidateData, resolvedSignatoryId);
       return success(res, 'Preview generated', preview, 200);
     } catch (err) {
       logger.error(`Preview template error: ${err.message}`);
@@ -90,7 +91,8 @@ class LetterTemplateController {
 
   async seedDefaultTemplates(req, res, next) {
     try {
-      const result = await letterTemplateService.seedDefaultTemplates(req.employee.id);
+      const force = req.query.force === 'true' || req.body?.force === true;
+      const result = await letterTemplateService.seedDefaultTemplates(req.employee.id, { force });
       return success(res, 'Seed completed', result, 200);
     } catch (err) {
       logger.error(`Seed templates error: ${err.message}`);

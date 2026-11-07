@@ -1,7 +1,7 @@
 const letterService = require('../services/letter.service');
 const letterPdfService = require('../services/letter_pdf.service');
 const emailService = require('../services/email.service');
-const { LetterTemplate, Employee, Office, Company } = require('../models');
+const { LetterTemplate, Employee, Office, Company, AuthorisedSignatory } = require('../models');
 const { success, paginated } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -42,8 +42,8 @@ class LetterController {
 
   async getAllLetters(req, res, next) {
     try {
-      const { page, limit, type, status } = req.query;
-      const result = await letterService.getAllLetters({ page, limit, type, status });
+      const { page, limit, type, status, search } = req.query;
+      const result = await letterService.getAllLetters({ page, limit, type, status, search });
       return paginated(res, 'All letters fetched', result.data, result.pagination, 200);
     } catch (err) {
       logger.error(`Get all letters error: ${err.message}`);
@@ -78,9 +78,15 @@ class LetterController {
     try {
       // Support both GET (query params) and POST (body)
       const params = req.method === 'GET' ? req.query : req.body;
-      const { templateId, template_id, employeeId, employee_id, content, title: bodyTitle, type: bodyType, candidateData } = params;
+      const { templateId, template_id, employeeId, employee_id, content, title: bodyTitle, type: bodyType, candidateData, signatoryId, signatory_id, recordLetter } = params;
       const resolvedTemplateId = templateId || template_id;
       const resolvedEmployeeId = employeeId || employee_id;
+      const resolvedSignatoryId = signatoryId || signatory_id;
+
+      let signatory = null;
+      if (resolvedSignatoryId) {
+        signatory = await AuthorisedSignatory.findByPk(resolvedSignatoryId);
+      }
 
       let employee = null;
       if (resolvedEmployeeId) {
@@ -134,11 +140,44 @@ class LetterController {
 
       const pdfBuffer = await letterPdfService.generateLetterPDF({
         content: content || '',
-        fullHtml: req.body.fullHtml,
+        fullHtml: req.body?.fullHtml,
         employee,
         title,
         type,
+        signatory,
       });
+
+      if (recordLetter === true || recordLetter === 'true') {
+        let letterRecord = null;
+        if (resolvedEmployeeId) {
+          letterRecord = await letterService.issueLetter({
+            employee_id: resolvedEmployeeId,
+            type,
+            title,
+            content: content || '',
+            issued_date: new Date(),
+            status: 'issued',
+            signatory_id: resolvedSignatoryId || null,
+          }, req.employee ? req.employee.id : null);
+        } else if (candidateData) {
+          letterRecord = await letterService.issueLetter({
+            employee_id: null,
+            candidate_name: candidateData.name || null,
+            candidate_email: candidateData.email || null,
+            candidate_phone: candidateData.phone || null,
+            type,
+            title,
+            content: content || '',
+            issued_date: new Date(),
+            status: 'issued',
+            signatory_id: resolvedSignatoryId || null,
+          }, req.employee ? req.employee.id : null);
+        }
+        if (letterRecord) {
+          res.setHeader('X-Letter-Id', String(letterRecord.id));
+          res.setHeader('Access-Control-Expose-Headers', 'X-Letter-Id');
+        }
+      }
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="letter-${employee.emp_code || 'employee'}.pdf"`);
@@ -152,9 +191,15 @@ class LetterController {
 
   async sendLetterEmail(req, res, next) {
     try {
-      const { templateId, template_id, employeeId, employee_id, content, fullHtml, title: bodyTitle, type: bodyType, subject, candidateData } = req.body;
+      const { templateId, template_id, employeeId, employee_id, content, fullHtml, title: bodyTitle, type: bodyType, subject, candidateData, signatoryId, signatory_id } = req.body;
       const resolvedTemplateId = templateId || template_id;
       const resolvedEmployeeId = employeeId || employee_id;
+      const resolvedSignatoryId = signatoryId || signatory_id || null;
+
+      let signatory = null;
+      if (resolvedSignatoryId) {
+        signatory = await AuthorisedSignatory.findByPk(resolvedSignatoryId);
+      }
 
       let employee = null;
       if (resolvedEmployeeId) {
@@ -217,6 +262,7 @@ class LetterController {
         employee,
         title,
         type,
+        signatory,
       });
 
       let letterId = null;
@@ -228,8 +274,8 @@ class LetterController {
           content: content || '',
           issued_date: new Date(),
           status: 'issued',
-          signatory_id: req.body.signatory_id || null,
-        }, req.employee.id);
+          signatory_id: resolvedSignatoryId,
+        }, req.employee ? req.employee.id : null);
         letterId = letter.id;
       } else if (candidateData) {
         const letter = await letterService.issueLetter({
@@ -242,8 +288,8 @@ class LetterController {
           content: content || '',
           issued_date: new Date(),
           status: 'issued',
-          signatory_id: req.body.signatory_id || null,
-        }, req.employee.id);
+          signatory_id: resolvedSignatoryId,
+        }, req.employee ? req.employee.id : null);
         letterId = letter.id;
       }
 

@@ -1,4 +1,4 @@
-const { Letter, Employee } = require('../models');
+const { Letter, Employee, AuthorisedSignatory } = require('../models');
 const { AppError } = require('../middleware/error.middleware');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
@@ -55,20 +55,42 @@ class LetterService {
     return letter;
   }
 
-  async getAllLetters({ page = 1, limit = PAGINATION.DEFAULT_LIMIT, type, status } = {}) {
+  async getAllLetters({ page = 1, limit = PAGINATION.DEFAULT_LIMIT, type, status, search } = {}) {
     const offset = (page - 1) * limit;
     const whereClause = {};
     if (type) whereClause.type = type;
     if (status) whereClause.status = status;
+    if (search) {
+      whereClause[Op.or] = [
+        { title: { [Op.like]: `%${search}%` } },
+        { candidate_name: { [Op.like]: `%${search}%` } },
+        { candidate_email: { [Op.like]: `%${search}%` } },
+      ];
+    }
 
     const { rows, count } = await Letter.findAndCountAll({
       where: whereClause,
-      include: [{
-        model: Employee,
-        as: 'issuedTo',
-        attributes: ['id', 'emp_code', 'name', 'department', 'designation'],
-      }],
-      order: [['issued_date', 'DESC']],
+      include: [
+        {
+          model: Employee,
+          as: 'issuedTo',
+          attributes: ['id', 'emp_code', 'name', 'department', 'designation', 'email'],
+          required: false,
+        },
+        {
+          model: AuthorisedSignatory,
+          as: 'signatory',
+          attributes: ['id', 'name', 'designation', 'signature_url'],
+          required: false,
+        },
+        {
+          model: Employee,
+          as: 'issuedBy',
+          attributes: ['id', 'emp_code', 'name'],
+          required: false,
+        },
+      ],
+      order: [['issued_date', 'DESC'], ['id', 'DESC']],
       limit,
       offset,
     });
@@ -88,11 +110,14 @@ class LetterService {
     const letter = await Letter.create({
       ...letterData,
       issued_by: issuedBy,
-      issued_date: new Date(),
-      status: 'issued',
+      issued_date: letterData.issued_date || new Date(),
+      status: letterData.status || 'issued',
     });
 
-    logger.info(`Letter issued to employee ${letterData.employee_id} by ${issuedBy}`);
+    const targetDesc = letter.employee_id
+      ? `employee ${letter.employee_id}`
+      : `candidate ${letter.candidate_name || letter.candidate_email}`;
+    logger.info(`Letter issued to ${targetDesc} by ${issuedBy}`);
     return letter;
   }
 

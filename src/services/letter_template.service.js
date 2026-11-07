@@ -1,4 +1,4 @@
-const { LetterTemplate, Employee, Office, Company, sequelize } = require('../models');
+const { LetterTemplate, Employee, Office, Company, AuthorisedSignatory, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { getPTSlabs } = require('../utils/payrollHelper');
@@ -106,9 +106,14 @@ class LetterTemplateService {
    * Preview a template with employee data substituted
    * Replaces all placeholders like [Employee_Name], [Job_Title], etc.
    */
-  async previewTemplate(templateId, employeeId, candidateData = null) {
+  async previewTemplate(templateId, employeeId, candidateData = null, signatoryId = null) {
     const template = await this.getTemplateById(templateId);
     const ptSlabs = await getPTSlabs();
+
+    let signatory = null;
+    if (signatoryId) {
+      signatory = await AuthorisedSignatory.findByPk(signatoryId);
+    }
 
     let employee = null;
     
@@ -299,6 +304,9 @@ class LetterTemplateService {
       '[PAN]': employee.pan_number || '_______________',
       '[PF_Number]': employee.pf_number || '_______________',
       '[UAN]': employee.uan || '_______________',
+      '[Signatory_Name]': signatory ? signatory.name : 'Authorised Signatory',
+      '[Signatory_Designation]': signatory ? signatory.designation : 'Human Resources',
+      '[Signatory_Company]': employee.company?.name || 'Company',
     };
 
     // Substitute placeholders in content
@@ -328,6 +336,12 @@ class LetterTemplateService {
         companyDetails: employee.company,
         date: dateStr
       },
+      signatory: signatory ? {
+        id: signatory.id,
+        name: signatory.name,
+        designation: signatory.designation,
+        signature_url: signatory.signature_url,
+      } : null,
       content,
     };
   }
@@ -335,14 +349,28 @@ class LetterTemplateService {
   /**
    * Bulk seed default templates
    */
-  async seedDefaultTemplates(createdBy) {
+  async seedDefaultTemplates(createdBy, { force = false } = {}) {
     const existing = await LetterTemplate.count();
-    if (existing > 0) {
-      logger.info('Templates already exist, skipping seed');
-      return { skipped: true, message: 'Templates already seeded' };
+    const defaults = this._getDefaultTemplates();
+
+    if (existing > 0 && !force) {
+      logger.info('Templates already exist, skipping seed (use force to re-seed/update)');
+      return { skipped: true, message: 'Templates already exist. Pass force=true to refresh default templates.' };
     }
 
-    const defaults = this._getDefaultTemplates();
+    if (force) {
+      for (const t of defaults) {
+        const found = await LetterTemplate.findOne({ where: { type: t.type, name: t.name } });
+        if (found) {
+          await found.update({ ...t, created_by: createdBy });
+        } else {
+          await LetterTemplate.create({ ...t, created_by: createdBy });
+        }
+      }
+      logger.info(`Refreshed ${defaults.length} default templates`);
+      return { updated: defaults.length, message: 'Templates refreshed successfully' };
+    }
+
     const templates = await LetterTemplate.bulkCreate(
       defaults.map(t => ({ ...t, created_by: createdBy }))
     );
@@ -352,79 +380,164 @@ class LetterTemplateService {
 
   _getDefaultTemplates() {
     return [
-      // ── OFFER LETTER ──
+      // ── OFFER LETTER (Req 12.1 & 12.2: Focus on offer terms, joining timeline, and CTC summary) ──
       {
         name: 'Offer Letter (Standard Corporate)',
         type: 'offer',
         category: 'Hiring',
-        description: 'Standard corporate offer letter with salary breakdown and terms',
+        description: 'Standard corporate offer letter with offered compensation summary and employment terms',
         variant_count: 5,
         is_active: true,
         content: `<p>Dear <strong>[Employee_Name]</strong>,</p>
 
-<p>Following our recent discussions, we are delighted to extend an offer of employment to you on behalf of <strong>[Company_Name]</strong>. We have been consistently impressed by your background and expertise, and we are confident that you will make a significant contribution to our organization's growth and success.</p>
+<p>Following our recent discussions and interview process, we are pleased to extend an offer of employment for the position of <strong>[Job_Title]</strong> in the <strong>[Department]</strong> department at <strong>[Company_Name]</strong>. We were thoroughly impressed by your credentials and are confident that your skills and dedication will be a tremendous addition to our team.</p>
 
-<p><strong>1. Appointment and Position</strong><br/>
-You are being offered the position of <strong>[Job_Title]</strong> in the <strong>[Department]</strong> department. Your initial place of posting will be at our <strong>[Office_Location]</strong> office. Your tentative date of joining is set for <strong>[Start_Date]</strong>, subject to the successful completion of standard background verification.</p>
+<p><strong>1. Offer Details & Place of Posting</strong><br/>
+Your initial posting will be at our <strong>[Office_Location]</strong> office. Your proposed date of joining is <strong>[Joining_Date]</strong>. This offer is contingent upon successful completion of standard reference checks and verification of your educational and professional credentials.</p>
 
-<p><strong>2. Compensation and Benefits</strong><br/>
-Your Total Target Remuneration will be as detailed below. This includes your fixed compensation as well as applicable statutory contributions. All payments are subject to applicable tax deductions at source (TDS) as per prevailing government regulations.</p>
+<p><strong>2. Compensation Summary</strong><br/>
+Your total offered remuneration will be as summarized below:</p>
 
-<table style="width: 100%; border-collapse: collapse; margin: 16px 0 24px;">
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0 20px;">
   <thead>
     <tr style="background: rgba(0,0,0,0.05);">
-      <th style="padding: 10px 12px; text-align: left; border: 1px solid rgba(0,0,0,0.1);">Compensation Component</th>
+      <th style="padding: 10px 12px; text-align: left; border: 1px solid rgba(0,0,0,0.1);">Compensation Element</th>
       <th style="padding: 10px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">Monthly (₹)</th>
       <th style="padding: 10px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">Annual (₹)</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Basic Salary</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">House Rent Allowance (HRA)</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[HRA]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[HRA_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Special Allowance</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Special_Allowance]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Special_Allowance_Annual]</td></tr>
-    <tr style="font-weight: 700; background: rgba(0,0,0,0.02);"><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Total Gross Salary</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Salary]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Salary_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Less: PF Contribution (Employee)</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[PF_Employee]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[PF_Employee_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Less: ESI Contribution (Employee)</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[ESI_Employee]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[ESI_Employee_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Less: Professional Tax (PT)</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[Professional_Tax]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">-[Professional_Tax_Annual]</td></tr>
-    <tr style="font-weight: 800; background: rgba(0,0,0,0.05);"><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Net Take Home Salary</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Net_Take_Home]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Net_Take_Home_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Add: Employer PF Contribution</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[PF_Employer]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[PF_Employer_Annual]</td></tr>
-    <tr><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Add: Employer ESI Contribution</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[ESI_Employer]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[ESI_Employer_Annual]</td></tr>
-    <tr style="font-weight: 900; background: rgba(0,0,0,0.08);"><td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Total Cost to Company (CTC)</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[CTC]</td><td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[CTC_Annual]</td></tr>
+    <tr>
+      <td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Total Fixed Gross Remuneration</td>
+      <td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1); font-weight: 700;">[Salary]</td>
+      <td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1); font-weight: 700;">[Salary_Annual]</td>
+    </tr>
+    <tr style="background: rgba(0,0,0,0.03);">
+      <td style="padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1);">Target Total Cost to Company (CTC)</td>
+      <td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1); font-weight: 900;">[CTC]</td>
+      <td style="padding: 8px 12px; text-align: right; border: 1px solid rgba(0,0,0,0.1); font-weight: 900;">[CTC_Annual]</td>
+    </tr>
   </tbody>
 </table>
 
-<p><strong>Terms & Conditions:</strong></p>
+<p><em>*Note: The comprehensive itemized breakdown of salary components (Basic, HRA, Allowances, PF, ESIC, and Professional Tax) will be formally provided in Annexure A of your Appointment Letter upon joining.</em></p>
+
+<p><strong>3. Key Terms of Employment:</strong></p>
 <ul>
-  <li>You will be on probation for the initial period of 3 Months, which may be extended based on performance.</li>
-  <li>During employment, you must follow all company rules, policies, and procedures.</li>
-  <li>Your employment may be terminated with notice as per company policy.</li>
-  <li>Confidentiality of company data must be maintained at all times.</li>
-  <li>Salary will be calculated on the basis of Present days.</li>
-  <li>2 Day Leave PM will be applied after probation period.</li>
+  <li><strong>Probation Period:</strong> You will be on probation for an initial period of 3 months from your joining date, extendable based on performance review.</li>
+  <li><strong>Working Hours & Policies:</strong> You will adhere to standard office hours and company policies and procedures.</li>
+  <li><strong>Notice Period:</strong> A mandatory notice period of 1 month is required upon resignation from the company. Resignation will not be considered valid without completing the required notice period.</li>
+  <li><strong>Confidentiality:</strong> You will maintain strict confidentiality regarding all company information, customer data, and proprietary matters.</li>
 </ul>
 
-<p><em>"It is mandatory for employee to serve a notice period of 1 month while resigning from the company. Resignation will not be considered valid without completing the required notice period."</em></p>
-
-<p><strong>Please sign and return a copy of this letter within 2 days as acceptance of the offer.</strong></p>
-
-<p>We welcome you to our organization and wish you a successful career with us.</p>`,
+<p><strong>4. Acceptance of Offer:</strong><br/>
+Please confirm your acceptance of this offer by signing and returning the duplicate copy of this letter within <strong>3 working days</strong>. We look forward to welcoming you to <strong>[Company_Name]</strong> and building a rewarding career together.</p>`,
       },
+      // ── APPOINTMENT LETTER (Req 12.2: Full Appointment Confirmation with Comprehensive Salary Breakup Annexure) ──
       {
         name: 'Appointment Letter',
         type: 'appointment',
         category: 'Hiring',
-        description: 'Formal appointment confirmation letter',
+        description: 'Formal appointment confirmation letter with detailed compensation structure (Annexure A)',
         variant_count: 5,
         is_active: true,
         content: `<p>Dear <strong>[Employee_Name]</strong>,</p>
 
-<p>We are pleased to confirm your appointment as <strong>[Job_Title]</strong> in the <strong>[Department]</strong> department at <strong>[Company_Name]</strong>, effective from <strong>[Start_Date]</strong>. You will be based at our <strong>[Office_Location]</strong> office.</p>
+<p>With reference to your acceptance of our offer letter and subsequent onboarding, we have the pleasure in confirming your appointment as <strong>[Job_Title]</strong> in the <strong>[Department]</strong> department at <strong>[Company_Name]</strong>, effective from <strong>[Start_Date]</strong>.</p>
 
-<p>Your employment with us is governed by the terms and conditions outlined in your offer letter and the company's HR policies. You will undergo a probation period of <strong>6 months</strong> from your date of joining, during which your performance will be reviewed.</p>
+<p><strong>1. Place of Posting</strong><br/>
+Your initial posting will be at our <strong>[Office_Location]</strong> office. However, your services are transferable to any other office, node, branch, or subsidiary of the Company as may be deemed necessary by the Management.</p>
 
-<p>Your compensation package is as detailed in the annexure attached. You are entitled to leave, benefits, and other perquisites as per the company policy applicable to your grade.</p>
+<p><strong>2. Probation & Confirmation</strong><br/>
+You will be on probation for a period of <strong>6 months</strong> from your date of joining. Upon successful completion of your probation and satisfactory performance, your services will be confirmed in writing. During or at the end of the probation period, the company reserves the right to extend the probation period or terminate the employment as per policy.</p>
 
-<p>We look forward to a long and mutually rewarding association. Welcome to <strong>[Company_Name]</strong>!</p>`,
+<p><strong>3. Compensation & Benefits (Annexure A)</strong><br/>
+Your detailed compensation and salary component structure is set forth in <strong>Annexure A</strong> below. All payments are subject to applicable tax deductions at source (TDS) and statutory compliance as per prevailing government regulations.</p>
+
+<div style="margin: 20px 0;">
+  <p style="font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; color: #1e293b;">
+    Annexure A — Detailed Compensation & Salary Structure
+  </p>
+  <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 11px;">
+    <thead>
+      <tr style="background: rgba(0,0,0,0.06);">
+        <th style="padding: 8px 10px; text-align: left; border: 1px solid rgba(0,0,0,0.12);">Salary Component</th>
+        <th style="padding: 8px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12);">Monthly (₹)</th>
+        <th style="padding: 8px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12);">Annual (₹)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1);">Basic Salary (40% of Gross)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1);">House Rent Allowance (HRA - 40% of Basic)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[HRA]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[HRA_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1);">Special Allowance</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Special_Allowance]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Special_Allowance_Annual]</td>
+      </tr>
+      <tr style="font-weight: 700; background: rgba(0,0,0,0.02);">
+        <td style="padding: 7px 10px; border: 1px solid rgba(0,0,0,0.12);">Total Gross Salary (A)</td>
+        <td style="padding: 7px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12);">[Salary]</td>
+        <td style="padding: 7px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12);">[Salary_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">Less: Employee Provident Fund (PF)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[PF_Employee]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[PF_Employee_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">Less: Employee State Insurance (ESIC)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[ESI_Employee]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[ESI_Employee_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">Less: Professional Tax (PT)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[Professional_Tax]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #dc2626;">-[Professional_Tax_Annual]</td>
+      </tr>
+      <tr style="font-weight: 700; background: rgba(220,38,38,0.03);">
+        <td style="padding: 7px 10px; border: 1px solid rgba(0,0,0,0.12); color: #b91c1c;">Total Employee Deductions (B)</td>
+        <td style="padding: 7px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12); color: #b91c1c;">-[Total_Deductions]</td>
+        <td style="padding: 7px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.12); color: #b91c1c;">-[Total_Deductions_Annual]</td>
+      </tr>
+      <tr style="font-weight: 800; background: rgba(16,185,129,0.08);">
+        <td style="padding: 8px 10px; border: 1px solid rgba(0,0,0,0.15); color: #065f46;">Net Take-Home Pay (A - B)</td>
+        <td style="padding: 8px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.15); color: #065f46;">[Net_Take_Home]</td>
+        <td style="padding: 8px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.15); color: #065f46;">[Net_Take_Home_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">Add: Employer Provident Fund (PF)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[PF_Employer]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[PF_Employer_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">Add: Employer State Insurance (ESIC)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[ESI_Employer]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[ESI_Employer_Annual]</td>
+      </tr>
+      <tr style="font-weight: 900; background: rgba(15,23,42,0.08);">
+        <td style="padding: 9px 10px; border: 2px solid rgba(15,23,42,0.2); color: #0f172a;">Total Cost to Company (CTC)</td>
+        <td style="padding: 9px 10px; text-align: right; border: 2px solid rgba(15,23,42,0.2); color: #0f172a;">[CTC]</td>
+        <td style="padding: 9px 10px; text-align: right; border: 2px solid rgba(15,23,42,0.2); color: #0f172a;">[CTC_Annual]</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p><strong>4. Confidentiality & Non-Disclosure</strong><br/>
+You agree to maintain strict confidentiality regarding all proprietary information, software codes, business strategies, and client data. Any breach shall lead to immediate termination and legal recourse.</p>
+
+<p><strong>5. Notice Period & Resignation</strong><br/>
+It is mandatory for the employee to serve a notice period of <strong>1 month</strong> while resigning from the company. Resignation will not be considered valid or accepted without completing the required notice period and proper handover.</p>
+
+<p>We welcome you to the <strong>[Company_Name]</strong> family and wish you a fruitful and rewarding tenure with us.</p>`,
       },
       // ── WARNING LETTER ──
       {
