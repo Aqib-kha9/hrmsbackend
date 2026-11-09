@@ -47,20 +47,27 @@ class OfficeService {
       offset,
     });
 
-    // Attach employee_count to each office row
+    // Attach active_employee_count to each office row (Req 2.7: Total Active Employees)
     const officeIds = rows.map((o) => o.id);
     if (officeIds.length > 0) {
       const empCounts = await Employee.findAll({
         attributes: ['office_id', [sequelize.fn('COUNT', sequelize.col('Employee.id')), 'employee_count']],
-        where: { office_id: { [Op.in]: officeIds }, role: { [Op.ne]: 'admin' } },
+        where: { office_id: { [Op.in]: officeIds }, status: 'active', role: { [Op.ne]: 'admin' } },
         group: ['office_id'],
         raw: true,
       });
       const countMap = {};
       empCounts.forEach((r) => { countMap[r.office_id] = parseInt(r.employee_count, 10); });
-      rows.forEach((o) => { o.dataValues.employee_count = countMap[o.id] || 0; });
+      rows.forEach((o) => {
+        const activeCount = countMap[o.id] || 0;
+        o.dataValues.active_employee_count = activeCount;
+        o.dataValues.employee_count = activeCount;
+      });
     } else {
-      rows.forEach((o) => { o.dataValues.employee_count = 0; });
+      rows.forEach((o) => {
+        o.dataValues.active_employee_count = 0;
+        o.dataValues.employee_count = 0;
+      });
     }
 
     return {
@@ -95,10 +102,13 @@ class OfficeService {
       throw error;
     }
 
-    // Attach employee count
-    const employeeCount = await Employee.count({ where: { office_id: id, role: { [Op.ne]: 'admin' } } });
+    // Attach active employee count (Req 2.7: Total Active Employees)
+    const activeEmployeeCount = await Employee.count({
+      where: { office_id: id, status: 'active', role: { [Op.ne]: 'admin' } },
+    });
     const officeJson = office.toJSON();
-    officeJson.employee_count = employeeCount;
+    officeJson.active_employee_count = activeEmployeeCount;
+    officeJson.employee_count = activeEmployeeCount;
 
     return officeJson;
   }
@@ -201,21 +211,23 @@ class OfficeService {
     const active = await Office.count({ where: { is_active: true } });
     const inactive = total - active;
 
-    // Total employees across all offices
-    const totalEmployees = await Employee.count({ where: { office_id: { [Op.ne]: null }, role: { [Op.ne]: 'admin' } } });
+    // Total active employees across all offices (Req 2.7: show Total Active Employees)
+    const totalActiveEmployees = await Employee.count({
+      where: { office_id: { [Op.ne]: null }, status: 'active', role: { [Op.ne]: 'admin' } },
+    });
 
-    // Employee count per office
+    // Active employee count per office (Req 2.7)
     const perOffice = await Employee.findAll({
       attributes: [
         'office_id',
         [sequelize.fn('COUNT', sequelize.col('Employee.id')), 'employee_count'],
       ],
-      where: { office_id: { [Op.ne]: null }, role: { [Op.ne]: 'admin' } },
+      where: { office_id: { [Op.ne]: null }, status: 'active', role: { [Op.ne]: 'admin' } },
       group: ['office_id'],
       raw: true,
     });
 
-    // Map office → employee count
+    // Map office → active employee count
     const employeeCountMap = {};
     perOffice.forEach((row) => {
       employeeCountMap[row.office_id] = parseInt(row.employee_count, 10);
@@ -225,7 +237,9 @@ class OfficeService {
       total_offices: total,
       active_offices: active,
       inactive_offices: inactive,
-      total_employees: totalEmployees,
+      total_active_employees: totalActiveEmployees,
+      total_employees: totalActiveEmployees,
+      active_employee_count_by_office: employeeCountMap,
       employee_count_by_office: employeeCountMap,
     };
   }
