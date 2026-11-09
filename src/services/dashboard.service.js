@@ -321,71 +321,266 @@ class DashboardService {
     const currentMonth = month;
     const currentYear = year;
 
-    // Total employees by status (excluding admin)
+    // 1. Total employees by status (excluding admin)
     const totalEmployees = await Employee.count({ where: { role: { [Op.ne]: 'admin' } } });
     const activeEmployees = await Employee.count({ where: { status: 'active', role: { [Op.ne]: 'admin' } } });
+    const inactiveEmployees = Math.max(0, totalEmployees - activeEmployees);
 
-    // Today's attendance
+    // 2. Today's attendance
     const todayPresent = await AttendanceRecord.count({
-      where: { date: dateStr, status: { [Op.in]: ['present', 'late'] } },
+      where: { date: dateStr, status: { [Op.in]: ['present', 'late', 'half_day'] } },
     });
-    const todayAbsent = await AttendanceRecord.count({
+    const todayAbsentCount = await AttendanceRecord.count({
       where: { date: dateStr, status: 'absent' },
     });
 
-    // Pending leave requests
-    const pendingLeaves = await LeaveRequest.count({ where: { status: 'pending' } });
+    // 3. Absent Employees Visibility (Requirement 2.1: Absent Employees, including visibility of employees marked absent)
+    const absentRecords = await AttendanceRecord.findAll({
+      where: { date: dateStr, status: 'absent' },
+      include: [
+        {
+          model: Employee,
+          as: 'employee',
+          attributes: ['id', 'employee_id', 'first_name', 'last_name', 'email', 'phone', 'department', 'designation', 'status', 'avatar_url'],
+          where: { role: { [Op.ne]: 'admin' } },
+          required: true,
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    }).catch(() => []);
 
-    // Active loans
+    // Check if any employees have pending/approved leaves covering today
+    const todayLeaves = await LeaveRequest.findAll({
+      where: {
+        from_date: { [Op.lte]: dateStr },
+        to_date: { [Op.gte]: dateStr },
+        status: { [Op.in]: ['approved', 'pending'] },
+      },
+      attributes: ['employee_id', 'leave_type', 'status', 'reason'],
+      raw: true,
+    }).catch(() => []);
+
+    const leaveMap = new Map();
+    for (const l of todayLeaves) {
+      leaveMap.set(l.employee_id, l);
+    }
+
+    const absentEmployeesList = absentRecords.map((rec) => {
+      const emp = rec.employee;
+      const leave = leaveMap.get(emp.id);
+      return {
+        id: emp.id,
+        employee_code: emp.employee_id || `EMP-${emp.id}`,
+        name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || 'Employee',
+        email: emp.email,
+        phone: emp.phone,
+        department: emp.department || 'Unassigned',
+        designation: emp.designation || 'Staff',
+        status: emp.status,
+        avatar_url: emp.avatar_url,
+        date: rec.date,
+        punch_in: rec.punch_in,
+        punch_out: rec.punch_out,
+        leave_type: leave ? leave.leave_type : null,
+        leave_status: leave ? leave.status : null,
+        reason: leave ? leave.reason : (rec.remarks || 'Marked Absent'),
+      };
+    });
+
+    // 4. Pending leave requests & active loans
+    const pendingLeaves = await LeaveRequest.count({ where: { status: 'pending' } });
     const activeLoans = await Loan.count({ where: { status: 'active' } });
 
-    // Department-wise count (excluding admin)
-    const departmentStats = await Employee.findAll({
-      attributes: ['department', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
-      where: { status: 'active', role: { [Op.ne]: 'admin' } },
-      group: ['department'],
+    // 5. Department Distribution (Requirement 2.1: Department Distribution with Total, Active, Inactive)
+    const allDeptEmployees = await Employee.findAll({
+      where: { role: { [Op.ne]: 'admin' } },
+      attributes: ['id', 'department', 'status'],
       raw: true,
-    });
+    }).catch(() => []);
+
+    const deptStatsMap = {};
+    for (const emp of allDeptEmployees) {
+      const dept = (emp.department || 'Unassigned').trim();
+      if (!deptStatsMap[dept]) {
+        deptStatsMap[dept] = {
+          department: dept,
+          total_employees: 0,
+          active_employees: 0,
+          inactive_employees: 0,
+        };
+      }
+      deptStatsMap[dept].total_employees += 1;
+      if (emp.status === 'active') {
+        deptStatsMap[dept].active_employees += 1;
+      } else {
+        deptStatsMap[dept].inactive_employees += 1;
+      }
+    }
+    const departmentDistribution = Object.values(deptStatsMap).sort((a, b) => b.total_employees - a.total_employees);
+
+    // 6. Recent Employees Section (Requirement 2.1: Recent Employees section)
+    const recentEmployees = await Employee.findAll({
+      where: { role: { [Op.ne]: 'admin' } },
+      attributes: [
+        'id',
+        'employee_id',
+        'first_name',
+        'last_name',
+        'email',
+        'phone',
+        'department',
+        'designation',
+        'status',
+        'date_of_joining',
+        'created_at',
+        'avatar_url',
+      ],
+      order: [['created_at', 'DESC']],
+      limit: 8,
+      raw: true,
+    }).catch(() => []);
+
+    // 7. Tour Expenses Summary (Requirement 2.1: Existing Tour Expenses section will be retained)
+    const [totalTourClaims, pendingTourClaims, approvedTourClaimsSum, activeToursCount] = await Promise.all([
+      TourExpense.count().catch(() => 0),
+      TourExpense.count({ where: { status: 'pending' } }).catch(() => 0),
+      TourExpense.sum('amount', { where: { status: 'approved' } }).catch(() => 0),
+      Tour.count({ where: { status: 'active' } }).catch(() => 0),
+    ]);
+
+    const tourExpensesSummary = {
+      total_claims: totalTourClaims,
+      pending_claims: pendingTourClaims,
+      approved_amount: Number(approvedTourClaimsSum || 0),
+      active_tours: activeToursCount,
+    };
+
+    // 8. Annual Leave Policy & Entitlements (Requirement 2.1: Leave entitlements according to finalized annual leave policy)
+    // 12 Casual Leave (CL) + 12 Earned Leave (EL) = 24 days annual entitlement
+    const balanceAgg = await LeaveBalance.findAll({
+      attributes: [
+        [sequelize.fn('SUM', sequelize.col('cl_allocated')), 'sum_cl_allocated'],
+        [sequelize.fn('SUM', sequelize.col('cl_used')), 'sum_cl_used'],
+        [sequelize.fn('SUM', sequelize.col('el_allocated')), 'sum_el_allocated'],
+        [sequelize.fn('SUM', sequelize.col('el_carried_forward')), 'sum_el_cf'],
+        [sequelize.fn('SUM', sequelize.col('el_used')), 'sum_el_used'],
+      ],
+      raw: true,
+    }).catch(() => [{}]);
+
+    const b = balanceAgg[0] || {};
+    const clAlloc = parseFloat(b.sum_cl_allocated) || (activeEmployees * 12);
+    const clUsed = parseFloat(b.sum_cl_used) || 0;
+    const elAlloc = parseFloat(b.sum_el_allocated) || (activeEmployees * 12);
+    const elCf = parseFloat(b.sum_el_cf) || 0;
+    const elUsed = parseFloat(b.sum_el_used) || 0;
+
+    const annualLeavePolicy = {
+      policy_name: 'Annual Leave Policy (12 CL + 12 EL = 24 Days/Year)',
+      annual_cl_days: 12,
+      annual_el_days: 12,
+      total_annual_days: 24,
+      rules: {
+        cl: 'Casual Leave (12 days): Annual reset, no carry forward.',
+        el: 'Earned Leave (12 days): Accumulative, carry forward permitted per policy.',
+      },
+      company_totals: {
+        cl_allocated: clAlloc,
+        cl_used: clUsed,
+        cl_balance: Math.max(0, clAlloc - clUsed),
+        el_allocated: elAlloc,
+        el_carried_forward: elCf,
+        el_used: elUsed,
+        el_balance: Math.max(0, (elAlloc + elCf) - elUsed),
+        total_allocated: clAlloc + elAlloc + elCf,
+        total_used: clUsed + elUsed,
+        total_balance: Math.max(0, (clAlloc + elAlloc + elCf) - (clUsed + elUsed)),
+      },
+    };
 
     return {
       total_employees: totalEmployees,
       active_employees: activeEmployees,
+      inactive_employees: inactiveEmployees,
       today_present: todayPresent,
-      today_absent: todayAbsent,
+      today_absent: Math.max(todayAbsentCount, absentEmployeesList.length),
+      absent_employees: absentEmployeesList,
       pending_leaves: pendingLeaves,
       active_loans: activeLoans,
-      department_stats: departmentStats,
+      department_distribution: departmentDistribution,
+      department_stats: departmentDistribution.map(d => ({
+        department: d.department,
+        count: d.active_employees,
+        total_count: d.total_employees,
+        inactive_count: d.inactive_employees,
+      })),
+      recent_employees: recentEmployees.map(emp => ({
+        id: emp.id,
+        employee_code: emp.employee_id || `EMP-${emp.id}`,
+        name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || 'Employee',
+        email: emp.email,
+        phone: emp.phone,
+        department: emp.department || 'Unassigned',
+        designation: emp.designation || 'Staff',
+        status: emp.status,
+        date_of_joining: emp.date_of_joining,
+        created_at: emp.created_at,
+        avatar_url: emp.avatar_url,
+      })),
+      tour_expenses_summary: tourExpensesSummary,
+      annual_leave_policy: annualLeavePolicy,
     };
   }
 
   async getAdminStats() {
     const currentYear = new Date().getFullYear();
 
-    // Monthly attendance averages
-    const monthlyAttendance = await MonthlyAttendance.findAll({
-      where: { year: currentYear },
-      attributes: [
-        'month',
-        [sequelize.fn('AVG', sequelize.col('attendance_percentage')), 'avg_attendance_percentage'],
-        [sequelize.fn('SUM', sequelize.col('present_days')), 'total_present_days'],
-        [sequelize.fn('SUM', sequelize.col('absent_days')), 'total_absent_days'],
-      ],
-      group: ['month'],
-      raw: true,
-    });
-
-    // Leave type distribution (filter by from_date year range since no year column)
-    const leaveDistribution = await LeaveRequest.findAll({
-      attributes: ['leave_type', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+    // Leave type distribution for PL, EL, and CL (Requirement 2.1)
+    const yearLeaves = await LeaveRequest.findAll({
+      attributes: ['leave_type', 'duration', 'status'],
       where: {
         from_date: {
           [Op.gte]: `${currentYear}-01-01`,
           [Op.lte]: `${currentYear}-12-31`,
         },
       },
-      group: ['leave_type'],
       raw: true,
-    });
+    }).catch(() => []);
+
+    const distMap = {
+      cl: { leave_type: 'CL', label: 'Casual Leave (CL)', count: 0, total_days: 0, annual_entitlement: 12, color: 'bg-amber-500' },
+      el: { leave_type: 'EL', label: 'Earned Leave (EL)', count: 0, total_days: 0, annual_entitlement: 12, color: 'bg-indigo-500' },
+      pl: { leave_type: 'PL', label: 'Privilege Leave (PL)', count: 0, total_days: 0, annual_entitlement: 12, color: 'bg-emerald-500' },
+      other: { leave_type: 'OTHER', label: 'Other / LWP', count: 0, total_days: 0, annual_entitlement: 0, color: 'bg-slate-400' },
+    };
+
+    for (const lr of yearLeaves) {
+      const typeLower = (lr.leave_type || '').toLowerCase();
+      const dur = parseFloat(lr.duration) || 1.0;
+      if (typeLower === 'cl' || typeLower === 'casual') {
+        distMap.cl.count += 1;
+        distMap.cl.total_days += dur;
+      } else if (typeLower === 'el' || typeLower === 'earned') {
+        distMap.el.count += 1;
+        distMap.el.total_days += dur;
+      } else if (typeLower === 'pl' || typeLower === 'paid' || typeLower === 'privilege') {
+        distMap.pl.count += 1;
+        distMap.pl.total_days += dur;
+      } else {
+        distMap.other.count += 1;
+        distMap.other.total_days += dur;
+      }
+    }
+
+    const totalLeaveRequests = yearLeaves.length;
+    const totalLeaveDays = Object.values(distMap).reduce((sum, item) => sum + item.total_days, 0);
+
+    const leaveTypeDistribution = [
+      { ...distMap.cl, percentage: totalLeaveRequests > 0 ? Math.round((distMap.cl.count / totalLeaveRequests) * 100) : 0 },
+      { ...distMap.el, percentage: totalLeaveRequests > 0 ? Math.round((distMap.el.count / totalLeaveRequests) * 100) : 0 },
+      { ...distMap.pl, percentage: totalLeaveRequests > 0 ? Math.round((distMap.pl.count / totalLeaveRequests) * 100) : 0 },
+      { ...distMap.other, percentage: totalLeaveRequests > 0 ? Math.round((distMap.other.count / totalLeaveRequests) * 100) : 0 },
+    ];
 
     // Loan type distribution
     const loanDistribution = await Loan.findAll({
@@ -393,11 +588,13 @@ class DashboardService {
       where: { status: 'active' },
       group: ['type'],
       raw: true,
-    });
+    }).catch(() => []);
 
     return {
-      monthly_attendance: monthlyAttendance,
-      leave_distribution: leaveDistribution,
+      leave_type_distribution: leaveTypeDistribution,
+      leave_distribution: leaveTypeDistribution.map(d => ({ leave_type: d.leave_type, count: d.count })),
+      total_leave_requests: totalLeaveRequests,
+      total_leave_days: totalLeaveDays,
       loan_distribution: loanDistribution,
     };
   }
