@@ -227,19 +227,6 @@ class AttendanceService {
     const today = new Date();
     const dateStr = getLocalDateString(today);
 
-    // ── Block punch-in on holidays ──
-    const holidayName = await _getHolidayName(dateStr);
-    if (holidayName) {
-      throw new AppError(`Today is a public holiday: ${holidayName}. Punch in is not allowed.`, 403);
-    }
-
-    // ── Block punch-in on weekends ──
-    const weekendDays = await _getWeekendDays();
-    const localToday = getLocalDate(today);
-    if (weekendDays.includes(localToday.getDay())) {
-      throw new AppError('Today is a weekend off. Punch in is not allowed.', 403);
-    }
-
     // Check if already punched in today
     const existingRecord = await AttendanceRecord.findOne({
       where: { employee_id: employeeId, date: dateStr },
@@ -1978,7 +1965,6 @@ class AttendanceService {
       weekly_off_worked_days: weeklyOffWorkedCount,
       remaining_leave_balance: remainingLeaveBalance,
     });
-  }
   }
 
   /**
