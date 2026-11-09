@@ -46,6 +46,43 @@ async function _getWeekendDays() {
 }
 
 /**
+ * Helper to get the employee's weekly-off day numbers (0 for Sun, 1 for Mon, ..., 6 for Sat).
+ * Supports rotational and fixed weekly-off days (Req 2.5 C).
+ */
+function getEmployeeWeeklyOffDays(emp, fallbackWeekendDays = [0]) {
+  if (!emp || !emp.weekly_off_days) {
+    return fallbackWeekendDays;
+  }
+  let offs = emp.weekly_off_days;
+  if (typeof offs === 'string') {
+    try {
+      offs = JSON.parse(offs);
+    } catch (e) {
+      offs = offs.split(',').map(s => s.trim());
+    }
+  }
+  if (!Array.isArray(offs) || offs.length === 0) {
+    return fallbackWeekendDays;
+  }
+  const dayMap = {
+    'sunday': 0, 'sun': 0, '0': 0,
+    'monday': 1, 'mon': 1, '1': 1,
+    'tuesday': 2, 'tue': 2, '2': 2,
+    'wednesday': 3, 'wed': 3, '3': 3,
+    'thursday': 4, 'thu': 4, '4': 4,
+    'friday': 5, 'fri': 5, '5': 5,
+    'saturday': 6, 'sat': 6, '6': 6,
+  };
+  const resolved = offs
+    .map(d => {
+      if (typeof d === 'number') return d;
+      return dayMap[String(d).toLowerCase().trim()];
+    })
+    .filter(n => n !== undefined);
+  return resolved.length > 0 ? resolved : fallbackWeekendDays;
+}
+
+/**
  * Checks whether a given YYYY-MM-DD date string falls on an active public holiday.
  * Returns the holiday name if matched, otherwise null.
  */
@@ -323,8 +360,20 @@ class AttendanceService {
     }
     const status = isLate ? 'late' : 'present';
 
+    // Check if check-in is on Sunday or employee's configured weekly-off day (Req 2.5 D)
+    const weekendDays = await _getWeekendDays();
+    const empWeeklyOffs = getEmployeeWeeklyOffDays(employee, weekendDays);
+    const localDayOfWeek = today.getDay();
+    const isWeeklyOffDay = empWeeklyOffs.includes(localDayOfWeek);
+    const holidayName = await _getHolidayName(dateStr);
+    const isWeeklyOffWorked = isWeeklyOffDay || Boolean(holidayName);
+    const weeklyOffComp = isWeeklyOffWorked ? 'additional_payable_day' : 'none';
+
     const checkInMethod = isOutdoor ? 'outdoor' : (outdoorData.check_in_method || 'web');
-    const remarks = outdoorData.remarks || outdoorData.reason || (isOutdoor ? 'Outdoor / Field duty check-in' : null);
+    const defaultRemark = isWeeklyOffWorked
+      ? `Worked on weekly off / Sunday (${weeklyOffComp})`
+      : (isOutdoor ? 'Outdoor / Field duty check-in' : null);
+    const remarks = outdoorData.remarks || outdoorData.reason || defaultRemark;
 
     const record = await AttendanceRecord.create({
       employee_id: employeeId,
@@ -337,6 +386,8 @@ class AttendanceService {
       check_in_longitude: longitude,
       check_in_method: checkInMethod,
       is_outdoor: isOutdoor,
+      is_weekly_off_worked: isWeeklyOffWorked,
+      weekly_off_compensation: weeklyOffComp,
       remarks,
       punch_in_office_id: matchingOffice ? matchingOffice.id : null,
     });
@@ -1115,7 +1166,7 @@ class AttendanceService {
     const employees = await Employee.findAll({
       where: empWhere,
       include: ['office', 'company'],
-      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department'],
+      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type', 'shift_start_time', 'shift_end_time'],
     });
 
     const empIds = employees.map(e => e.id);
@@ -1174,7 +1225,7 @@ class AttendanceService {
     });
 
     // Get all leaves (approved and pending) for employees during this period (Req 10)
-    const { LeaveRequest } = require('../models');
+    const { LeaveRequest, LeaveBalance } = require('../models');
     const allLeaves = await LeaveRequest.findAll({
       where: {
         employee_id: { [Op.in]: empIds },
@@ -1190,7 +1241,17 @@ class AttendanceService {
       leaveMap.get(l.employee_id).push(l);
     });
 
-    // Get weekend policy for grid rendering
+    // Fetch leave balances for all employees to calculate remaining leave balance (Req 2.5 A)
+    const leaveBalances = await LeaveBalance.findAll({
+      where: {
+        employee_id: { [Op.in]: empIds },
+        year: currentYear,
+      },
+    });
+    const balanceMap = new Map();
+    leaveBalances.forEach(b => balanceMap.set(b.employee_id, b));
+
+    // Get global weekend policy for grid rendering fallback
     const weekendDaysGrid = await _getWeekendDays();
 
     // Generate days metadata array with day name, number, holiday and weekend status
@@ -1231,9 +1292,19 @@ class AttendanceService {
       const empRecords = recordMap.get(emp.id) || new Map();
       const empLeaves = leaveMap.get(emp.id) || [];
       const salary = emp.fixed_gross || 0;
+      const empWeeklyOffs = getEmployeeWeeklyOffDays(emp, weekendDaysGrid);
 
       let grid = '';
-      let presentCount = 0, absentCount = 0, woffCount = 0, leaveCount = 0, holidayCount = 0, tourCount = 0;
+      const gridDetails = [];
+      let presentCount = 0;
+      let halfDayCount = 0;
+      let absentCount = 0;
+      let woffCount = 0;
+      let paidLeaveCount = 0;
+      let holidayCount = 0;
+      let tourCount = 0;
+      let weeklyOffWorkedCount = 0;
+      let weeklyOffWorkedCompDays = 0;
 
       let dObj = new Date(startDate);
       while (dObj <= endDate) {
@@ -1244,94 +1315,210 @@ class AttendanceService {
         const dayOfWeek = dObj.getDay();
 
         const isHoliday = holidaysList.some(h => dateStr >= h.start_date && dateStr <= h.end_date);
-        const isWeekendDay = weekendDaysGrid.includes(dayOfWeek);
+        const isWeekendDay = empWeeklyOffs.includes(dayOfWeek);
         const activeLeave = empLeaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
 
         const record = empRecords.get(dateStr);
+        let statusChar = '-';
+        let displayCode = '-';
+        let isWoWorked = false;
+        let compensation = 'none';
+
         if (record) {
-          if (record.status === 'present' || record.status === 'late') {
-            grid += 'P'; presentCount++;
+          isWoWorked = Boolean(record.is_weekly_off_worked);
+          compensation = record.weekly_off_compensation || 'none';
+
+          // Auto-detect weekly off working if on employee's off day and marked present/half_day
+          if (isWoWorked || (isWeekendDay && (record.status === 'present' || record.status === 'half_day' || (record.check_in_time && record.status !== 'weekend')))) {
+            isWoWorked = true;
+            compensation = compensation !== 'none' ? compensation : 'additional_payable_day';
+            weeklyOffWorkedCount++;
+            if (compensation === 'additional_payable_day') {
+              weeklyOffWorkedCompDays++;
+            }
+            if (record.status === 'half_day') {
+              grid += 'P';
+              statusChar = 'P';
+              displayCode = 'WO';
+              halfDayCount++;
+            } else {
+              grid += 'P';
+              statusChar = 'P';
+              displayCode = 'WO';
+              presentCount++;
+            }
+          } else if (record.status === 'present' || record.status === 'late') {
+            grid += 'P';
+            statusChar = 'P';
+            displayCode = 'P';
+            presentCount++;
           } else if (record.status === 'half_day') {
-            grid += 'P'; presentCount++;
+            grid += 'P';
+            statusChar = 'P';
+            displayCode = 'HD';
+            halfDayCount++;
           } else if (record.status === 'tour') {
-            grid += 'T'; tourCount++;
+            grid += 'T';
+            statusChar = 'T';
+            displayCode = 'T';
+            tourCount++;
           } else if (record.status === 'absent') {
-            grid += 'A'; absentCount++;
+            grid += 'A';
+            statusChar = 'A';
+            displayCode = 'A';
+            absentCount++;
           } else if (record.status === 'holiday') {
-            grid += 'H'; holidayCount++;
+            grid += 'H';
+            statusChar = 'H';
+            displayCode = 'H';
+            holidayCount++;
           } else if (record.status === 'weekend') {
-            grid += 'W'; woffCount++;
+            grid += 'W';
+            statusChar = 'W';
+            displayCode = 'W';
+            woffCount++;
           } else if (record.status === 'leave' || record.status === 'on_leave') {
-            grid += 'L'; leaveCount++;
+            grid += 'L';
+            statusChar = 'L';
+            displayCode = 'L';
+            paidLeaveCount++;
           } else {
-            grid += 'P'; presentCount++;
+            grid += 'P';
+            statusChar = 'P';
+            displayCode = 'P';
+            presentCount++;
           }
         } else {
           const isFutureDate = dObj > localToday;
           if (isFutureDate) {
             grid += '-';
+            statusChar = '-';
+            displayCode = '-';
           } else if (activeLeave) {
             if (activeLeave.status === 'pending') {
               // Req 10: Pending/unapproved leave does not automatically reduce salary
               grid += 'L';
-              leaveCount++;
+              statusChar = 'L';
+              displayCode = 'L';
+              paidLeaveCount++;
             } else if (activeLeave.payroll_treatment === 'unpaid' || (!activeLeave.is_paid && activeLeave.payroll_treatment !== 'paid')) {
               // Explicit Admin-designated Loss of Pay (LWP)
               grid += 'A';
+              statusChar = 'A';
+              displayCode = 'A';
               absentCount++;
             } else {
               // Approved Paid / Adjusted Leave
               grid += 'L';
-              leaveCount++;
+              statusChar = 'L';
+              displayCode = 'L';
+              paidLeaveCount++;
             }
           } else if (isHoliday) {
-            grid += 'H'; holidayCount++;
+            grid += 'H';
+            statusChar = 'H';
+            displayCode = 'H';
+            holidayCount++;
           } else if (isWeekendDay) {
-            grid += 'W'; woffCount++;
+            grid += 'W';
+            statusChar = 'W';
+            displayCode = 'W';
+            woffCount++;
           } else {
-            grid += 'A'; absentCount++;
+            grid += 'A';
+            statusChar = 'A';
+            displayCode = 'A';
+            absentCount++;
           }
         }
+
+        gridDetails.push({
+          date: dateStr,
+          day: dObj.getDate(),
+          status: record ? record.status : (activeLeave ? (activeLeave.status === 'pending' ? 'pending_leave' : (activeLeave.payroll_treatment === 'unpaid' ? 'lwp' : 'paid_leave')) : (isHoliday ? 'holiday' : (isWeekendDay ? 'weekend' : (dObj > localToday ? 'future' : 'absent')))),
+          display_code: displayCode,
+          is_weekend: isWeekendDay,
+          is_weekly_off_worked: isWoWorked,
+          compensation,
+          is_holiday: isHoliday,
+          is_leave: Boolean(activeLeave),
+          is_lwp: displayCode === 'A',
+          is_outdoor: record ? Boolean(record.is_outdoor) : false,
+          check_in_time: record ? record.check_in_time : null,
+          check_out_time: record ? record.check_out_time : null,
+          total_hours: record ? record.total_hours : null,
+          remarks: record ? record.remarks : null,
+        });
 
         dObj.setDate(dObj.getDate() + 1);
       }
 
-      const p = presentCount;
-      const a = absentCount;
-      const w = woffCount;
-      const l = leaveCount;
-      const h = holidayCount;
-      const t = tourCount;
-      const payableDays = p + w + h + t + l;
+      // Compute remaining leave balance from LeaveBalance model
+      const bal = balanceMap.get(emp.id);
+      const clAlloc = bal ? Number(bal.cl_allocated || 12) : 12;
+      const clUsed = bal ? Number(bal.cl_used || 0) : 0;
+      const clRem = Math.max(0, clAlloc - clUsed);
+
+      const elAlloc = bal ? Number(bal.el_allocated || 12) : 12;
+      const elCarr = bal ? Number(bal.el_carried_forward || 0) : 0;
+      const elUsed = bal ? Number(bal.el_used || 0) : 0;
+      const elRem = Math.max(0, (elAlloc + elCarr) - elUsed);
+
+      const compOffBal = bal ? Number(bal.comp_off_balance || 0) : 0;
+      const remainingBalance = Math.round((clRem + elRem + compOffBal) * 100) / 100;
+
+      const totalLeavesTaken = paidLeaveCount + absentCount;
+      const payableDays = presentCount + (halfDayCount * 0.5) + woffCount + holidayCount + tourCount + paidLeaveCount + weeklyOffWorkedCompDays;
 
       return {
         id: emp.emp_code,
+        employee_id: emp.id,
         name: emp.name,
         role: emp.designation || 'Employee',
         department: emp.department || '---',
         hub: emp.office?.name || '---',
         company: emp.company?.name || '---',
         salary,
-        present: p,
-        woff: w,
-        leave: l,
-        holiday: h,
-        tour: t,
-        absent: a,
+        present: presentCount,
+        half_days: halfDayCount,
+        woff: woffCount,
+        leave: paidLeaveCount,
+        paid_leaves_taken: paidLeaveCount,
+        holiday: holidayCount,
+        tour: tourCount,
+        absent: absentCount,
+        lwp_days: absentCount,
+        total_leaves_taken: totalLeavesTaken,
+        remaining_leave_balance: remainingBalance,
+        weekly_off_worked_days: weeklyOffWorkedCount,
+        weekly_off_days: emp.weekly_off_days || ['Sunday'],
+        rotational_weekly_off: Boolean(emp.rotational_weekly_off),
+        weekly_off_type: emp.weekly_off_type || 'fixed',
+        shift_start_time: emp.shift_start_time,
+        shift_end_time: emp.shift_end_time,
         grid,
-        employee_id: emp.id,
-        // Enterprise Summary Metrics (Req 6.4, 8)
+        grid_details: gridDetails,
         muster_days: daysInCycle,
         total_days: daysInCycle,
-        present_days: p,
+        present_days: presentCount,
         payable_days: payableDays,
-        lwp_days: a,
-        holidays: h,
-        week_offs: w,
-        tour_days: t,
-        leave_days: l,
+        holidays: holidayCount,
+        week_offs: woffCount,
+        tour_days: tourCount,
+        leave_days: paidLeaveCount,
       };
     });
+
+    const summary = {
+      total_staff: rows.length,
+      total_payable_days: rows.reduce((s, r) => s + (r.payable_days || 0), 0),
+      total_lwp_days: rows.reduce((s, r) => s + (r.lwp_days || 0), 0),
+      total_leaves_taken: rows.reduce((s, r) => s + (r.total_leaves_taken || 0), 0),
+      total_paid_leaves_taken: rows.reduce((s, r) => s + (r.paid_leaves_taken || 0), 0),
+      total_remaining_leave_balance: rows.reduce((s, r) => s + (r.remaining_leave_balance || 0), 0),
+      total_weekly_off_worked: rows.reduce((s, r) => s + (r.weekly_off_worked_days || 0), 0),
+      muster_days: daysInCycle,
+    };
 
     return {
       month: currentMonth,
@@ -1347,13 +1534,24 @@ class AttendanceService {
         end_date: endDateStr,
         days_in_cycle: daysInCycle,
         days_metadata: daysMetadata,
+        summary,
       },
       rows,
     };
   }
 
-  // Admin: Manual attendance entry / Authorized marking on employee's behalf (Req 5.2)
-  async manualEntry(adminId, { employeeId, date, status, reason, is_outdoor, check_in_time, check_out_time }) {
+  // Admin: Manual attendance entry / Authorized marking on employee's behalf (Req 5.2, 2.5 B, 2.5 D)
+  async manualEntry(adminId, {
+    employeeId,
+    date,
+    status,
+    reason,
+    is_outdoor,
+    is_weekly_off_worked,
+    weekly_off_compensation,
+    check_in_time,
+    check_out_time,
+  }) {
     let emp = null;
     if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
       emp = await Employee.findByPk(employeeId);
@@ -1369,8 +1567,38 @@ class AttendanceService {
     const dateStr = date instanceof Date
       ? date.toISOString().split('T')[0]
       : (date || getLocalDateString(new Date()));
-    const statusMap = { 'Present': 'present', 'Absent': 'absent', 'Half Day': 'half_day', 'Late': 'late' };
+    const statusMap = {
+      'Present': 'present',
+      'Absent': 'absent',
+      'Half Day': 'half_day',
+      'Late': 'late',
+      'Weekly Off Worked': 'present',
+      'present': 'present',
+      'absent': 'absent',
+      'half_day': 'half_day',
+      'late': 'late',
+      'weekly_off_worked': 'present',
+    };
     const recordStatus = statusMap[status] || (status ? status.toLowerCase() : 'present');
+
+    const isWoWorked = Boolean(is_weekly_off_worked) || status === 'Weekly Off Worked' || status === 'weekly_off_worked';
+    const woComp = isWoWorked ? (weekly_off_compensation || 'additional_payable_day') : 'none';
+
+    // Credit Comp-Off to LeaveBalance if that compensation was chosen (Req 2.5 D)
+    if (isWoWorked && woComp === 'comp_off') {
+      try {
+        const { LeaveBalance } = require('../models');
+        const entryYear = new Date(dateStr).getFullYear();
+        const [lb] = await LeaveBalance.findOrCreate({
+          where: { employee_id: emp.id, year: entryYear },
+          defaults: { employee_id: emp.id, year: entryYear, available: 24, cl_allocated: 12, el_allocated: 12, comp_off_balance: 0 },
+        });
+        await lb.increment('comp_off_balance', { by: 1 });
+        logger.info(`Credited +1 comp-off to employee ${emp.emp_code} for working on weekly off (${dateStr})`);
+      } catch (lbErr) {
+        logger.warn(`Could not increment comp_off_balance: ${lbErr.message}`);
+      }
+    }
 
     // Build timestamps for Present / Half Day entries
     let checkInTime = null;
@@ -1411,7 +1639,7 @@ class AttendanceService {
 
     const outdoorFlag = Boolean(is_outdoor);
     const method = outdoorFlag ? 'outdoor' : 'manual';
-    const remarkText = `Marked by authorized user ${adminId}: ${reason || (outdoorFlag ? 'Outdoor duty' : 'Manual entry')}`;
+    const remarkText = `Marked by authorized user ${adminId}: ${reason || (isWoWorked ? `Weekly off worked (${woComp})` : outdoorFlag ? 'Outdoor duty' : 'Manual adjustment')}`;
 
     // Check if record already exists for this date
     let record = await AttendanceRecord.findOne({ where: { employee_id: emp.id, date: dateStr } });
@@ -1425,6 +1653,8 @@ class AttendanceService {
         total_minutes: totalMinutes || record.total_minutes,
         check_in_method: method,
         is_outdoor: outdoorFlag,
+        is_weekly_off_worked: isWoWorked,
+        weekly_off_compensation: woComp,
         marked_by_id: adminId,
         remarks: remarkText,
       });
@@ -1442,16 +1672,95 @@ class AttendanceService {
         overtime_minutes: 0,
         check_in_method: method,
         is_outdoor: outdoorFlag,
+        is_weekly_off_worked: isWoWorked,
+        weekly_off_compensation: woComp,
         marked_by_id: adminId,
         remarks: remarkText,
       });
     }
 
-    // Recalculate monthly
+    // Recalculate monthly attendance summary
     await this._updateMonthlyAttendance(emp.id, dateStr);
 
-    logger.info(`Admin ${adminId} authorized attendance entry for ${emp.emp_code} on ${dateStr} as ${recordStatus}`);
+    // Sync with payroll ledger if payroll entry already generated for this month
+    try {
+      const { PayrollEntry, PayrollCycle } = require('../models');
+      const [punchYr, punchMo] = dateStr.split('-').map(Number);
+      const cycle = await PayrollCycle.findOne({
+        where: { year: punchYr, month: punchMo },
+      });
+      if (cycle) {
+        const payrollEntry = await PayrollEntry.findOne({
+          where: { payroll_cycle_id: cycle.id, employee_id: emp.id },
+        });
+        if (payrollEntry) {
+          const updatedMonthly = await MonthlyAttendance.findOne({
+            where: { employee_id: emp.id, month: punchMo, year: punchYr },
+          });
+          if (updatedMonthly) {
+            const newAbsent = Number(updatedMonthly.absent_days) + Number(updatedMonthly.half_days) * 0.5;
+            await payrollEntry.update({ absent_days: newAbsent });
+            logger.info(`Synced attendance adjustment into PayrollEntry for employee ${emp.emp_code} (absent: ${newAbsent})`);
+          }
+        }
+      }
+    } catch (syncErr) {
+      logger.warn(`Failed to auto-sync payroll entry on attendance adjust: ${syncErr.message}`);
+    }
+
+    logger.info(`Admin ${adminId} authorized attendance entry for ${emp.emp_code} on ${dateStr} as ${recordStatus} (weeklyOffWorked: ${isWoWorked})`);
     return record;
+  }
+
+  // Admin/HR: Configure employee weekly-off schedule (fixed or rotational) (Req 2.5 C)
+  async updateWeeklyOffConfig(adminId, { employeeId, weekly_off_days, rotational_weekly_off, weekly_off_type }) {
+    let emp = null;
+    if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
+      emp = await Employee.findByPk(employeeId);
+    }
+    if (!emp) {
+      emp = await Employee.findOne({ where: { emp_code: employeeId } });
+    }
+    if (!emp) {
+      throw new AppError(`Employee ${employeeId} not found`, 404);
+    }
+
+    let formattedDays = weekly_off_days;
+    if (typeof formattedDays === 'string') {
+      try {
+        formattedDays = JSON.parse(formattedDays);
+      } catch (e) {
+        formattedDays = formattedDays.split(',').map(s => s.trim());
+      }
+    }
+    if (!Array.isArray(formattedDays)) {
+      formattedDays = [formattedDays];
+    }
+
+    const isRotational = rotational_weekly_off !== undefined
+      ? Boolean(rotational_weekly_off)
+      : (weekly_off_type === 'rotational');
+    const offType = weekly_off_type || (isRotational ? 'rotational' : 'fixed');
+
+    await emp.update({
+      weekly_off_days: formattedDays,
+      rotational_weekly_off: isRotational,
+      weekly_off_type: offType,
+    });
+
+    const todayStr = getLocalDateString(new Date());
+    await this._updateMonthlyAttendance(emp.id, todayStr);
+
+    logger.info(`Admin ${adminId} configured weekly off for ${emp.emp_code}: ${JSON.stringify(formattedDays)} (${offType})`);
+
+    return {
+      employee_id: emp.id,
+      emp_code: emp.emp_code,
+      name: emp.name,
+      weekly_off_days: formattedDays,
+      rotational_weekly_off: isRotational,
+      weekly_off_type: offType,
+    };
   }
 
   // Private: Calculate distance between two coordinates (Haversine formula)
@@ -1470,7 +1779,7 @@ class AttendanceService {
     return deg * (Math.PI / 180);
   }
 
-  // Private: Update monthly attendance summary
+  // Private: Update monthly attendance summary (Req 2.5 A, C, D)
   async _updateMonthlyAttendance(employeeId, dateStr) {
     const [punchYear, punchMonth, punchDay] = dateStr.split('-').map(Number);
     
@@ -1503,12 +1812,18 @@ class AttendanceService {
       },
     });
 
+    // Load employee weekly-off configuration (fixed or rotational) (Req 2.5 C)
+    const emp = await Employee.findByPk(employeeId, {
+      attributes: ['id', 'emp_code', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type'],
+    });
+
     // ── Fetch dynamic weekend policy & holidays ──
     const weekendDays = await _getWeekendDays();
+    const empWeeklyOffs = getEmployeeWeeklyOffDays(emp, weekendDays);
     const holidays = await getHolidaysInMonth(year, month);
 
     // Fetch leaves overlapping the cycle (both approved and pending) (Req 10)
-    const { LeaveRequest } = require('../models');
+    const { LeaveRequest, LeaveBalance } = require('../models');
     const cycleLeaves = await LeaveRequest.findAll({
       where: {
         employee_id: employeeId,
@@ -1545,6 +1860,9 @@ class AttendanceService {
     let tourDays = 0;
     let weekendDaysCount = 0;
     let holidayDaysCount = 0;
+    let paidLeavesCount = 0;
+    let weeklyOffWorkedCount = 0;
+    let weeklyOffWorkedCompDays = 0;
 
     const recordMap = new Map(records.map(r => [r.date, r]));
     const localTodayStr = getLocalDateString(new Date());
@@ -1559,17 +1877,29 @@ class AttendanceService {
       const dayOfWeek = dObj.getDay();
 
       const isHoliday = isHolidayDate(dateKey, holidays);
-      const isWeekendDay = weekendDays.includes(dayOfWeek);
+      const isWeekendDay = empWeeklyOffs.includes(dayOfWeek);
 
       const r = recordMap.get(dateKey);
       if (r) {
-        if (r.status === 'present') presentDays++;
+        const isWoWorked = Boolean(r.is_weekly_off_worked);
+        const woComp = r.weekly_off_compensation || 'none';
+
+        if (isWoWorked || (isWeekendDay && (r.status === 'present' || r.status === 'half_day' || (r.check_in_time && r.status !== 'weekend')))) {
+          weeklyOffWorkedCount++;
+          if (woComp !== 'comp_off') {
+            weeklyOffWorkedCompDays++;
+          }
+          if (r.status === 'half_day') halfDays++;
+          else presentDays++;
+        } else if (r.status === 'present') presentDays++;
         else if (r.status === 'late') lateDays++;
         else if (r.status === 'half_day') halfDays++;
         else if (r.status === 'tour') tourDays++;
         else if (r.status === 'absent') absentDays++;
         else if (r.status === 'weekend') weekendDaysCount++;
         else if (r.status === 'holiday') holidayDaysCount++;
+        else if (r.status === 'leave' || r.status === 'on_leave') paidLeavesCount++;
+        else presentDays++;
       } else {
         if (isWeekendDay) {
           weekendDaysCount++;
@@ -1577,7 +1907,7 @@ class AttendanceService {
           holidayDaysCount++;
         } else if (isProtectedLeaveDate(dateKey)) {
           // Protected from salary reduction (pending unapproved leave or approved paid leave)
-          holidayDaysCount++;
+          paidLeavesCount++;
         } else if (isUnpaidLeaveDate(dateKey)) {
           // Explicit Admin decision: unpaid leave (LWP)
           absentDays++;
@@ -1600,15 +1930,27 @@ class AttendanceService {
         else if (r.status === 'absent') absentDays++;
         else if (r.status === 'weekend') weekendDaysCount++;
         else if (r.status === 'holiday') holidayDaysCount++;
+        else if (r.status === 'leave') paidLeavesCount++;
       }
     });
 
-    // Calculate working days (excluding weekends AND holidays)
-    const totalWorkingDays = countWorkingDaysInMonth(year, month, weekendDays, holidays);
+    // Calculate working days (excluding employee configured weekly offs AND holidays)
+    const totalWorkingDays = countWorkingDaysInMonth(year, month, empWeeklyOffs, holidays);
     // Tour days are treated as paid/present for attendance percentage
     const attendancePercentage = totalWorkingDays > 0
       ? Math.round(((presentDays + lateDays + halfDays * 0.5 + tourDays) / totalWorkingDays) * 100)
       : 0;
+
+    // Formula for Payable Days (Req 2.5 A & D)
+    const payableDays = presentDays + (halfDays * 0.5) + weekendDaysCount + holidayDaysCount + paidLeavesCount + tourDays + weeklyOffWorkedCompDays;
+    const totalLeavesTaken = paidLeavesCount + absentDays;
+
+    // Fetch live LeaveBalance for this employee
+    const lb = await LeaveBalance.findOne({ where: { employee_id: employeeId, year } });
+    const clBal = lb ? Math.max(0, Number(lb.cl_allocated || 12) - Number(lb.cl_used || 0)) : 12;
+    const elBal = lb ? Math.max(0, (Number(lb.el_allocated || 12) + Number(lb.el_carried_forward || 0)) - Number(lb.el_used || 0)) : 12;
+    const compOffBal = lb ? Number(lb.comp_off_balance || 0) : 0;
+    const remainingLeaveBalance = Math.round((clBal + elBal + compOffBal) * 100) / 100;
 
     await MonthlyAttendance.upsert({
       employee_id: employeeId,
@@ -1623,7 +1965,14 @@ class AttendanceService {
       tour_days: tourDays,
       total_working_days: totalWorkingDays,
       attendance_percentage: attendancePercentage,
+      payable_days: payableDays,
+      lwp_days: absentDays,
+      paid_leaves_taken: paidLeavesCount,
+      total_leaves_taken: totalLeavesTaken,
+      weekly_off_worked_days: weeklyOffWorkedCount,
+      remaining_leave_balance: remainingLeaveBalance,
     });
+  }
   }
 
   /**

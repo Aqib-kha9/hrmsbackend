@@ -76,15 +76,36 @@ const manualEntrySchema = Joi.object({
       'date.format': 'Date must be in YYYY-MM-DD format',
       'any.required': 'Date is required',
     }),
-  status: Joi.string().valid('Present', 'Absent', 'Half Day', 'Late').required()
+  status: Joi.string().valid('Present', 'Absent', 'Half Day', 'Late', 'Weekly Off Worked', 'present', 'absent', 'half_day', 'late', 'weekly_off_worked').required()
     .messages({
-      'any.only': 'Status must be Present, Absent, Half Day, or Late',
+      'any.only': 'Status must be Present, Absent, Half Day, Late, or Weekly Off Worked',
       'any.required': 'Status is required',
     }),
   reason: Joi.string().allow('', null).max(500).optional(),
   is_outdoor: Joi.boolean().optional(),
+  is_weekly_off_worked: Joi.boolean().optional(),
+  weekly_off_compensation: Joi.string().valid('none', 'additional_payable_day', 'comp_off').optional(),
   check_in_time: Joi.string().optional(),
   check_out_time: Joi.string().optional(),
+});
+
+const weeklyOffConfigSchema = Joi.object({
+  employeeId: Joi.alternatives().try(
+    Joi.string().trim(),
+    Joi.number().integer().positive()
+  ).required()
+    .messages({
+      'any.required': 'Employee ID is required',
+    }),
+  weekly_off_days: Joi.alternatives().try(
+    Joi.array().items(Joi.string().trim()).min(1),
+    Joi.string().trim()
+  ).required()
+    .messages({
+      'any.required': 'Weekly off days selection is required',
+    }),
+  rotational_weekly_off: Joi.boolean().optional(),
+  weekly_off_type: Joi.string().valid('fixed', 'rotational').optional(),
 });
 
 // ── Tour management schemas ──
@@ -149,4 +170,5 @@ module.exports = {
   markTourSchema,
   tourListQuerySchema,
   cancelTourSchema,
+  weeklyOffConfigSchema,
 };

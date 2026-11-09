@@ -117,6 +117,16 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
     allowNull: true,
     references: { model: 'offices', key: 'id' },
   },
+  is_weekly_off_worked: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether attendance was performed on an applicable weekly off or Sunday (Req 2.5 D)',
+  },
+  weekly_off_compensation: {
+    type: DataTypes.ENUM('none', 'additional_payable_day', 'comp_off'),
+    defaultValue: 'none',
+    comment: 'Compensation treatment for working on weekly off / Sunday (Req 2.5 D)',
+  },
 }, {
   tableName: 'attendance_records',
   indexes: [

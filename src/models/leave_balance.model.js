@@ -44,6 +44,12 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
     defaultValue: 0.00,
     comment: 'Earned Leave days consumed in the year',
   },
+  // ── Compensatory Off (Comp-Off): Earned for Sunday / Weekly Off worked (Req 2.5 D) ──
+  comp_off_balance: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Compensatory off days earned from weekly-off / holiday working (Req 2.5 D)',
+  },
   // ── Legacy fields for backward compatibility ──
   available: {
     type: DataTypes.INTEGER,

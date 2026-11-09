@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const { validate } = require('../middleware/validate.middleware');
-const { punchInSchema, punchOutSchema, monthlyQuerySchema, manualEntrySchema, adminLiveQuerySchema, adminHistoryQuerySchema, adminMonthlyQuerySchema, markTourSchema, tourListQuerySchema, cancelTourSchema } = require('../validators/attendance.validator');
+const { punchInSchema, punchOutSchema, monthlyQuerySchema, manualEntrySchema, adminLiveQuerySchema, adminHistoryQuerySchema, adminMonthlyQuerySchema, markTourSchema, tourListQuerySchema, cancelTourSchema, weeklyOffConfigSchema } = require('../validators/attendance.validator');
 const attendanceController = require('../controllers/attendance.controller');
 
 // All routes require authentication
@@ -26,6 +26,8 @@ router.get('/admin/live', requirePermission('attendance:read'), validate(adminLi
 router.get('/admin/history-all', requirePermission('attendance:read'), validate(adminHistoryQuerySchema, 'query'), attendanceController.getAllAttendanceHistory);
 router.get('/admin/monthly-all', requirePermission('attendance:read'), validate(adminMonthlyQuerySchema, 'query'), attendanceController.getAllMonthlyAttendance);
 router.post('/admin/manual-entry', requirePermission('attendance:create'), validate(manualEntrySchema), attendanceController.manualEntry);
+router.put('/admin/adjust', requirePermission('attendance:update'), validate(manualEntrySchema), attendanceController.manualEntry);
+router.put('/admin/weekly-off-config', requirePermission('attendance:update'), validate(weeklyOffConfigSchema), attendanceController.updateWeeklyOffConfig);
 
 // ── Tour management routes ──
 // Admin/HR: Mark an employee on tour (creates tour + attendance records)

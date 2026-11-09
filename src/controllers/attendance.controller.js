@@ -151,19 +151,49 @@ class AttendanceController {
   async manualEntry(req, res, next) {
     try {
       const adminId = req.employee.id;
-      const { employeeId, date, status, reason, is_outdoor, check_in_time, check_out_time } = req.body;
+      const {
+        employeeId,
+        date,
+        status,
+        reason,
+        is_outdoor,
+        is_weekly_off_worked,
+        weekly_off_compensation,
+        check_in_time,
+        check_out_time,
+      } = req.body;
       const result = await attendanceService.manualEntry(adminId, {
         employeeId,
         date,
         status,
         reason,
         is_outdoor,
+        is_weekly_off_worked,
+        weekly_off_compensation,
         check_in_time,
         check_out_time,
       });
-      return success(res, 'Manual attendance entry created successfully', result, 200);
+      return success(res, 'Manual attendance entry recorded successfully', result, 200);
     } catch (err) {
       logger.error(`Manual entry error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Admin/HR: Configure employee weekly-off schedule (fixed or rotational) (Req 2.5 C)
+  async updateWeeklyOffConfig(req, res, next) {
+    try {
+      const adminId = req.employee.id;
+      const { employeeId, weekly_off_days, rotational_weekly_off, weekly_off_type } = req.body;
+      const result = await attendanceService.updateWeeklyOffConfig(adminId, {
+        employeeId,
+        weekly_off_days,
+        rotational_weekly_off,
+        weekly_off_type,
+      });
+      return success(res, 'Weekly off schedule updated successfully', result, 200);
+    } catch (err) {
+      logger.error(`Update weekly off config error: ${err.message}`);
       return next(err);
     }
   }

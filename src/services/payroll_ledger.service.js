@@ -63,10 +63,11 @@ class PayrollLedgerService {
     // Effective absent days deducted this cycle
     const effectiveAbsentDays = Math.max(0, rawAbsent + leaveAdjust - carryForward);
 
-    // If Admin explicitly set manual_payable_days, respect it directly; else compute from effective absent days
+    // If Admin explicitly set manual_payable_days, respect it directly; else compute from effective absent days + weekly off compensation (Req 2.5 D)
+    const weeklyOffComp = Number(row.weekly_off_worked_days || 0);
     const payableDays = (row.manual_payable_days !== null && row.manual_payable_days !== undefined && !isNaN(Number(row.manual_payable_days)))
-      ? Math.max(0, Math.min(D, Number(row.manual_payable_days)))
-      : Math.max(0, elapsedDays - effectiveAbsentDays);
+      ? Math.max(0, Math.min(D + weeklyOffComp, Number(row.manual_payable_days)))
+      : Math.max(0, elapsedDays - effectiveAbsentDays + weeklyOffComp);
 
     const fixedGross = Number(row.fixed_gross) || 0;
 
@@ -283,6 +284,7 @@ class PayrollLedgerService {
         special_allowance: activeStructure?.special_allowance || 0,
         performance_allowance: activeStructure?.performance_allowance || emp.performance_allowance || 0,
         absent_days: absentDays,
+        weekly_off_worked_days: monthly ? Number(monthly.weekly_off_worked_days || 0) : 0,
         cycle_leaves: cycleLeaveMap.get(emp.id) || [],
       };
 

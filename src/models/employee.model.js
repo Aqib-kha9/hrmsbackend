@@ -104,6 +104,24 @@ const Employee = sequelize.define('Employee', {
     defaultValue: false,
     comment: 'Identifies if employee works on rotational shifts',
   },
+  rotational_weekly_off: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: 'Whether employee has rotational weekly off schedule (Req 2.5 C)',
+  },
+  weekly_off_type: {
+    type: DataTypes.ENUM('fixed', 'rotational'),
+    allowNull: false,
+    defaultValue: 'fixed',
+    comment: 'Weekly off type: fixed or rotational (Req 2.5 C)',
+  },
+  weekly_off_days: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: ['Sunday'],
+    comment: 'Configured weekly off day names, e.g. ["Sunday"], ["Monday"], etc. (Req 2.5 C)',
+  },
   half_day_late_minutes: {
     type: DataTypes.INTEGER,
     allowNull: true,
