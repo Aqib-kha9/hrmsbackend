@@ -234,6 +234,8 @@ class AuthService {
           date_of_joining: employeeData.date_of_joining,
           date_of_birth: employeeData.date_of_birth,
           gender: employeeData.gender,
+          marital_status: employeeData.marital_status || 'unmarried',
+          father_or_husband_name: employeeData.father_or_husband_name || employeeData.father_husband_name || null,
           address: employeeData.address,
           office_id: employeeData.office_id,
           company_id: employeeData.company_id || null,
@@ -245,8 +247,10 @@ class AuthService {
           pf_applicable: employeeData.pf_applicable !== false,
           pf_ceiling: employeeData.pf_ceiling || false,
           pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
+          pf_employment_date: employeeData.pf_employment_date || null,
           esic_applicable: employeeData.esic_applicable || false,
           esic_contribution_mode: employeeData.esic_contribution_mode || 'shared',
+          esic_number: employeeData.esic_number || null,
           // Bank
           bank_name: employeeData.bank_name,
           bank_account_number: employeeData.bank_account_number,
@@ -263,10 +267,12 @@ class AuthService {
           company_name: employeeData.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
           // Emergency
           emergency_contact_name: employeeData.emergency_contact_name,
+          emergency_contact_phone: employeeData.emergency_contact_phone || employeeData.emergency_phone || null,
           emergency_contact_relation: employeeData.emergency_contact_relation,
           // Shift configuration
           shift_start_time: employeeData.shift_start_time || null,
           shift_end_time: employeeData.shift_end_time || null,
+          is_rotational_shift: Boolean(employeeData.is_rotational_shift),
           half_day_late_minutes: employeeData.half_day_late_minutes ?? 60,
         }, { transaction: t });
 

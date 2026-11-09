@@ -73,6 +73,17 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.ENUM('male', 'female', 'other'),
     allowNull: true,
   },
+  marital_status: {
+    type: DataTypes.ENUM('married', 'unmarried', 'other'),
+    allowNull: true,
+    defaultValue: 'unmarried',
+    comment: 'Marital status (married, unmarried, other)',
+  },
+  father_or_husband_name: {
+    type: DataTypes.STRING(150),
+    allowNull: true,
+    comment: "Father's name or Husband's name as applicable",
+  },
   address: {
     type: DataTypes.TEXT,
     allowNull: true,
@@ -86,6 +97,12 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.TIME,
     allowNull: true,
     comment: 'Shift end time (e.g., 18:00:00)',
+  },
+  is_rotational_shift: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: 'Identifies if employee works on rotational shifts',
   },
   half_day_late_minutes: {
     type: DataTypes.INTEGER,
@@ -177,10 +194,20 @@ const Employee = sequelize.define('Employee', {
     allowNull: true,
     comment: 'PF account number',
   },
+  pf_employment_date: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    comment: 'PF employment/enrollment date',
+  },
   uan: {
     type: DataTypes.STRING(20),
     allowNull: true,
     comment: 'Universal Account Number (UAN)',
+  },
+  esic_number: {
+    type: DataTypes.STRING(30),
+    allowNull: true,
+    comment: 'ESIC IP Number / Registration Number',
   },
   // Location & legal entity
   location: {
@@ -198,6 +225,11 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(100),
     allowNull: true,
     comment: 'Emergency contact person name',
+  },
+  emergency_contact_phone: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    comment: 'Emergency contact phone number',
   },
   emergency_contact_relation: {
     type: DataTypes.STRING(50),
