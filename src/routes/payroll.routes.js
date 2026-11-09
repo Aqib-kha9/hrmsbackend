@@ -9,6 +9,7 @@ const {
   updateEntryStatusSchema,
   disburseSchema,
   historyQuerySchema,
+  ledgerQuerySchema,
 } = require('../validators/payroll.validator');
 const payrollController = require('../controllers/payroll.controller');
 const payrollLedgerController = require('../controllers/payroll_ledger.controller');
@@ -31,10 +32,10 @@ router.patch('/payslips/:id/mark-paid', requirePermission('payroll:approve'), pa
 // ── Payroll ledger routes (new) ──
 
 // GET /payroll/ledger — current-cycle ledger with full calculations
-router.get('/ledger', requirePermission('payroll:read'), payrollLedgerController.getCurrentLedger);
+router.get('/ledger', requirePermission('payroll:read'), validate(ledgerQuerySchema, 'query'), payrollLedgerController.getCurrentLedger);
 
 // GET /payroll/ledger/:cycleId — specific cycle
-router.get('/ledger/:cycleId', requirePermission('payroll:read'), payrollLedgerController.getLedgerByCycleId);
+router.get('/ledger/:cycleId', requirePermission('payroll:read'), validate(ledgerQuerySchema, 'query'), payrollLedgerController.getLedgerByCycleId);
 
 // GET /payroll/history — past cycles summary
 router.get('/history', requirePermission('payroll:read'), validate(historyQuerySchema, 'query'), payrollLedgerController.getCycleHistory);

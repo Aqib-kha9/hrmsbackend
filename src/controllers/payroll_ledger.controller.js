@@ -6,7 +6,8 @@ class PayrollLedgerController {
   // ── GET /payroll/ledger — current-cycle ledger rows ──
   async getCurrentLedger(req, res, next) {
     try {
-      const result = await payrollLedgerService.getCurrentLedger();
+      const { company_id, company } = req.query;
+      const result = await payrollLedgerService.getCurrentLedger({ company_id, company });
       return success(res, 'Current ledger fetched', result, 200);
     } catch (err) {
       logger.error(`[PayrollLedger] getCurrentLedger error: ${err.message}`);
@@ -18,7 +19,8 @@ class PayrollLedgerController {
   async getLedgerByCycleId(req, res, next) {
     try {
       const { cycleId } = req.params;
-      const result = await payrollLedgerService.getLedgerByCycleId(cycleId);
+      const { company_id, company } = req.query;
+      const result = await payrollLedgerService.getLedgerByCycleId(cycleId, { company_id, company });
       return success(res, 'Ledger cycle fetched', result, 200);
     } catch (err) {
       logger.error(`[PayrollLedger] getLedgerByCycleId error: ${err.message}`);
@@ -29,8 +31,8 @@ class PayrollLedgerController {
   // ── GET /payroll/history — past cycles summary ──
   async getCycleHistory(req, res, next) {
     try {
-      const { page = 1, limit = 20, year } = req.query;
-      const result = await payrollLedgerService.getCycleHistory({ page, limit, year });
+      const { page = 1, limit = 20, year, company_id, company } = req.query;
+      const result = await payrollLedgerService.getCycleHistory({ page, limit, year, company_id, company });
       return paginated(res, 'Cycle history fetched', result.data, result.pagination, 200);
     } catch (err) {
       logger.error(`[PayrollLedger] getCycleHistory error: ${err.message}`);

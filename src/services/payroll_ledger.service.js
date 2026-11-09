@@ -184,7 +184,7 @@ class PayrollLedgerService {
 
   // ── API: GET /payroll/ledger — current-cycle ledger rows ──
 
-  async getCurrentLedger() {
+  async getCurrentLedger({ company_id, company } = {}) {
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
@@ -195,6 +195,13 @@ class PayrollLedgerService {
     const elapsedWorkingDays = countElapsedWorkingDays(currentYear, currentMonth + 1, now, null, weekendDays, holidays);
 
     const ptSlabs = await getPTSlabs();
+
+    // Fetch active companies for filter metadata
+    const allCompanies = await Company.findAll({
+      where: { is_active: true },
+      attributes: ['id', 'name', 'code'],
+      order: [['name', 'ASC']],
+    });
 
     let cycle = await PayrollCycle.findOne({
       where: { month_index: currentMonth, year: currentYear },
@@ -209,7 +216,7 @@ class PayrollLedgerService {
       // Auto-create the cycle if it doesn't exist
       cycle = await this._createCycleForMonth(currentMonth, currentYear);
       if (!cycle) {
-        return { cycle: null, rows: [] };
+        return { cycle: null, rows: [], companies: allCompanies, companyBreakdown: [] };
       }
       // Re-fetch with entries
       cycle = await PayrollCycle.findOne({
@@ -307,13 +314,19 @@ class PayrollLedgerService {
       const dailyCost = Math.round(projectedMonthly / dynamicDays);
       const payableDays = Math.max(0, elapsedWorkingDays - absentDays);
 
+      const compId = emp.company_id || emp.company?.id || null;
+      const compName = emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+      const compCode = emp.company?.code || (emp.emp_code ? String(emp.emp_code).replace(/[0-9]/g, '') : 'APA');
+
       return {
         id: entry.id,
         employeeId: emp.id,
         employeeCode: emp.emp_code,
         name: emp.name,
         location: emp.location || emp.office?.name || 'Unknown',
-        company: emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+        companyId: compId,
+        companyCode: compCode,
+        company: compName,
         designation: emp.designation || '',
         fixedGross: Number(emp.fixed_gross) || 0,
         pfApplicable: emp.pf_applicable || false,
@@ -359,6 +372,51 @@ class PayrollLedgerService {
       };
     });
 
+    // Company breakdown across all entries
+    const companyMap = new Map();
+    rows.forEach(r => {
+      const cKey = r.companyId ? String(r.companyId) : r.company;
+      if (!companyMap.has(cKey)) {
+        companyMap.set(cKey, {
+          id: r.companyId,
+          name: r.company,
+          code: r.companyCode,
+          staffCount: 0,
+          totalGross: 0,
+          totalDeductions: 0,
+          totalNet: 0,
+          totalCTC: 0,
+        });
+      }
+      const b = companyMap.get(cKey);
+      b.staffCount += 1;
+      b.totalGross += (r.totalEarnings || 0);
+      b.totalDeductions += (r.grossDeductions || 0);
+      b.totalNet += (r.net || 0);
+      b.totalCTC += (r.totalMonthlyCTC || 0);
+    });
+
+    const companyBreakdown = Array.from(companyMap.values()).map(c => ({
+      ...c,
+      totalGross: Math.round(c.totalGross),
+      totalDeductions: Math.round(c.totalDeductions),
+      totalNet: Math.round(c.totalNet),
+      totalCTC: Math.round(c.totalCTC),
+    }));
+
+    // Filter rows if company filter applied
+    let filteredRows = rows;
+    if (company_id && company_id !== 'all' && company_id !== 'ALL') {
+      const cidNum = Number(company_id);
+      filteredRows = rows.filter(r => (cidNum && r.companyId === cidNum) || String(r.companyId) === String(company_id) || r.company === String(company_id));
+    } else if (company && company !== 'All' && company !== 'ALL') {
+      const compLower = String(company).toLowerCase();
+      filteredRows = rows.filter(r =>
+        (r.company && r.company.toLowerCase() === compLower) ||
+        (r.companyCode && r.companyCode.toLowerCase() === compLower)
+      );
+    }
+
     return {
       cycle: {
         id: cycle.id,
@@ -371,13 +429,16 @@ class PayrollLedgerService {
         disbursement_reference: cycle.disbursement_reference,
         elapsedDays: elapsedWorkingDays,
       },
-      rows,
+      rows: filteredRows,
+      allRowsCount: rows.length,
+      companies: allCompanies,
+      companyBreakdown,
     };
   }
 
   // ── API: GET /payroll/ledger/:cycleId — specific cycle rows ──
 
-  async getLedgerByCycleId(cycleId) {
+  async getLedgerByCycleId(cycleId, { company_id, company } = {}) {
     const cycle = await PayrollCycle.findByPk(cycleId, {
       include: [{
         model: PayrollEntry,
@@ -393,6 +454,13 @@ class PayrollLedgerService {
     // Dynamic working days for the cycle's month (past cycle = full month, no elapsed prorating)
     const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
 
+    // Fetch active companies for filter dropdown
+    const allCompanies = await Company.findAll({
+      where: { is_active: true },
+      attributes: ['id', 'name', 'code'],
+      order: [['name', 'ASC']],
+    });
+
     const rows = (cycle.entries || []).map(entry => {
       const emp = entry.employee;
       const calculation = this._calculateRow({
@@ -404,13 +472,19 @@ class PayrollLedgerService {
         esic_applicable: emp.esic_applicable,
       }, dynamicDays);
 
+      const compId = emp.company_id || emp.company?.id || null;
+      const compName = emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+      const compCode = emp.company?.code || (emp.emp_code ? String(emp.emp_code).replace(/[0-9]/g, '') : 'APA');
+
       return {
         id: entry.id,
         employeeId: emp.id,
         employeeCode: emp.emp_code,
         name: emp.name,
         location: emp.location || emp.office?.name || 'Unknown',
-        company: emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+        companyId: compId,
+        companyCode: compCode,
+        company: compName,
         designation: emp.designation || '',
         fixedGross: Number(emp.fixed_gross) || 0,
         pfApplicable: emp.pf_applicable || false,
@@ -451,12 +525,57 @@ class PayrollLedgerService {
       };
     });
 
-    return { cycle, rows };
+    // Company breakdown
+    const companyMap = new Map();
+    rows.forEach(r => {
+      const cKey = r.companyId ? String(r.companyId) : r.company;
+      if (!companyMap.has(cKey)) {
+        companyMap.set(cKey, {
+          id: r.companyId,
+          name: r.company,
+          code: r.companyCode,
+          staffCount: 0,
+          totalGross: 0,
+          totalDeductions: 0,
+          totalNet: 0,
+          totalCTC: 0,
+        });
+      }
+      const b = companyMap.get(cKey);
+      b.staffCount += 1;
+      b.totalGross += (r.totalEarnings || 0);
+      b.totalDeductions += (r.grossDeductions || 0);
+      b.totalNet += (r.net || 0);
+      b.totalCTC += (r.totalMonthlyCTC || 0);
+    });
+
+    const companyBreakdown = Array.from(companyMap.values()).map(c => ({
+      ...c,
+      totalGross: Math.round(c.totalGross),
+      totalDeductions: Math.round(c.totalDeductions),
+      totalNet: Math.round(c.totalNet),
+      totalCTC: Math.round(c.totalCTC),
+    }));
+
+    // Filter rows if company specified
+    let filteredRows = rows;
+    if (company_id && company_id !== 'all' && company_id !== 'ALL') {
+      const cidNum = Number(company_id);
+      filteredRows = rows.filter(r => (cidNum && r.companyId === cidNum) || String(r.companyId) === String(company_id) || r.company === String(company_id));
+    } else if (company && company !== 'All' && company !== 'ALL') {
+      const compLower = String(company).toLowerCase();
+      filteredRows = rows.filter(r =>
+        (r.company && r.company.toLowerCase() === compLower) ||
+        (r.companyCode && r.companyCode.toLowerCase() === compLower)
+      );
+    }
+
+    return { cycle, rows: filteredRows, allRowsCount: rows.length, companies: allCompanies, companyBreakdown };
   }
 
   // ── API: GET /payroll/history — past cycles summary ──
 
-  async getCycleHistory({ page = 1, limit = PAGINATION.DEFAULT_LIMIT, year } = {}) {
+  async getCycleHistory({ page = 1, limit = PAGINATION.DEFAULT_LIMIT, year, company_id, company } = {}) {
     const where = {};
     if (year) where.year = year;
 
@@ -465,7 +584,11 @@ class PayrollLedgerService {
       include: [{
         model: PayrollEntry,
         as: 'entries',
-        include: [{ model: Employee, as: 'employee', include: [{ model: Office, as: 'office' }] }],
+        include: [{
+          model: Employee,
+          as: 'employee',
+          include: [{ model: Office, as: 'office' }, { model: Company, as: 'company' }]
+        }],
       }],
       order: [['year', 'DESC'], ['month_index', 'DESC']],
       limit: parseInt(limit),
@@ -476,9 +599,12 @@ class PayrollLedgerService {
       'July', 'August', 'September', 'October', 'November', 'December'];
 
     const history = await Promise.all(rows.map(async (cycle) => {
-      const entries = cycle.entries || [];
+      let entries = cycle.entries || [];
       let totalPayout = 0;
+      let totalGross = 0;
+      let totalDeductions = 0;
       const branchMap = new Map();
+      const companyMap = new Map();
 
       // Dynamic working days for this cycle's month (past cycle = full month)
       const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
@@ -486,6 +612,11 @@ class PayrollLedgerService {
       for (const entry of entries) {
         const emp = entry.employee;
         if (!emp) continue;
+
+        const compId = emp.company_id || emp.company?.id || null;
+        const compName = emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+        const compCode = emp.company?.code || (emp.emp_code ? String(emp.emp_code).replace(/[0-9]/g, '') : 'APA');
+
         const calc = this._calculateRow({
           ...emp.toJSON(),
           ...entry.toJSON(),
@@ -494,7 +625,33 @@ class PayrollLedgerService {
           pf_ceiling: emp.pf_ceiling,
           esic_applicable: emp.esic_applicable,
         }, dynamicDays);
+
+        // Accumulate company breakdown across all entries in the cycle
+        const compKey = compId ? String(compId) : compName;
+        if (!companyMap.has(compKey)) {
+          companyMap.set(compKey, { id: compId, name: compName, code: compCode, payout: 0, gross: 0, deductions: 0, staff: 0 });
+        }
+        const c = companyMap.get(compKey);
+        c.payout += calc.net;
+        c.gross += calc.totalEarnings;
+        c.deductions += calc.grossDeductions;
+        c.staff += 1;
+
+        // If company filter is applied, only sum matching employees for the cycle total
+        let matchesCompanyFilter = true;
+        if (company_id && company_id !== 'all' && company_id !== 'ALL') {
+          const cidNum = Number(company_id);
+          matchesCompanyFilter = (cidNum && compId === cidNum) || String(compId) === String(company_id) || compName === String(company_id);
+        } else if (company && company !== 'All' && company !== 'ALL') {
+          const compLower = String(company).toLowerCase();
+          matchesCompanyFilter = compName.toLowerCase() === compLower || compCode.toLowerCase() === compLower;
+        }
+
+        if (!matchesCompanyFilter) continue;
+
         totalPayout += calc.net;
+        totalGross += calc.totalEarnings;
+        totalDeductions += calc.grossDeductions;
 
         const branchName = emp.location || emp.office?.name || 'Unknown';
         if (!branchMap.has(branchName)) {
@@ -509,6 +666,29 @@ class PayrollLedgerService {
         ...b,
         payout: Math.round(b.payout),
       }));
+
+      const companyBreakdown = Array.from(companyMap.values()).map(c => ({
+        ...c,
+        payout: Math.round(c.payout),
+        gross: Math.round(c.gross),
+        deductions: Math.round(c.deductions),
+      }));
+
+      const filteredStaffCount = entries.filter(e => {
+        if (!e.employee) return false;
+        if (company_id && company_id !== 'all' && company_id !== 'ALL') {
+          const cidNum = Number(company_id);
+          const compId = e.employee.company_id || e.employee.company?.id;
+          const compName = e.employee.company?.name || e.employee.company_name;
+          return (cidNum && compId === cidNum) || String(compId) === String(company_id) || compName === String(company_id);
+        } else if (company && company !== 'All' && company !== 'ALL') {
+          const compLower = String(company).toLowerCase();
+          const compName = e.employee.company?.name || e.employee.company_name || '';
+          const compCode = e.employee.company?.code || '';
+          return compName.toLowerCase() === compLower || compCode.toLowerCase() === compLower;
+        }
+        return true;
+      }).length;
 
       const monthName = `${monthNames[cycle.month_index] || cycle.month} ${cycle.year}`;
       const monthId = `${monthNames[cycle.month_index]?.substring(0, 3).toUpperCase() || cycle.month?.substring(0, 3).toUpperCase()}-${cycle.year}`;
@@ -538,8 +718,12 @@ class PayrollLedgerService {
           ? new Date(cycle.paid_on).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
           : 'Pending',
         totalPayout: Math.round(totalPayout),
-        totalStaff: entries.length,
+        totalGross: Math.round(totalGross),
+        totalDeductions: Math.round(totalDeductions),
+        totalStaff: filteredStaffCount,
+        allStaffCount: entries.length,
         branches: branchBreakdown,
+        companies: companyBreakdown,
         status: STATUS_MAP[cycle.status] || cycle.status || 'Processing',
         method: METHOD_MAP[cycle.disbursement_mode] || cycle.disbursement_mode || 'N/A',
         rawPayout: Math.round(totalPayout),

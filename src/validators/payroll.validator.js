@@ -43,6 +43,13 @@ const historyQuerySchema = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
   year: Joi.number().integer().min(2020).max(2030).optional(),
+  company_id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
+  company: Joi.string().optional(),
+});
+
+const ledgerQuerySchema = Joi.object({
+  company_id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
+  company: Joi.string().optional(),
 });
 
 module.exports = {
@@ -51,4 +58,5 @@ module.exports = {
   updateEntryStatusSchema,
   disburseSchema,
   historyQuerySchema,
+  ledgerQuerySchema,
 };
