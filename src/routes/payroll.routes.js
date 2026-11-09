@@ -10,6 +10,7 @@ const {
   disburseSchema,
   historyQuerySchema,
   ledgerQuerySchema,
+  financialSummaryQuerySchema,
 } = require('../validators/payroll.validator');
 const payrollController = require('../controllers/payroll.controller');
 const payrollLedgerController = require('../controllers/payroll_ledger.controller');
@@ -33,6 +34,9 @@ router.patch('/payslips/:id/mark-paid', requirePermission('payroll:approve'), pa
 
 // GET /payroll/ledger — current-cycle ledger with full calculations
 router.get('/ledger', requirePermission('payroll:read'), validate(ledgerQuerySchema, 'query'), payrollLedgerController.getCurrentLedger);
+
+// GET /payroll/financial-summary — Section 2.9 Financial & Analytical Summary
+router.get('/financial-summary', requirePermission('payroll:read'), validate(financialSummaryQuerySchema, 'query'), payrollLedgerController.getFinancialSummary);
 
 // GET /payroll/ledger/:cycleId — specific cycle
 router.get('/ledger/:cycleId', requirePermission('payroll:read'), validate(ledgerQuerySchema, 'query'), payrollLedgerController.getLedgerByCycleId);

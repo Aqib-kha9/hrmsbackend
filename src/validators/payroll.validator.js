@@ -52,6 +52,14 @@ const ledgerQuerySchema = Joi.object({
   company: Joi.string().optional(),
 });
 
+const financialSummaryQuerySchema = Joi.object({
+  periodType: Joi.string().valid('monthly', 'yearly').default('monthly'),
+  year: Joi.number().integer().min(2020).max(2035).optional(),
+  month: Joi.number().integer().min(1).max(12).optional(),
+  company_id: Joi.alternatives().try(Joi.number().integer(), Joi.string()).optional(),
+  company: Joi.string().optional(),
+});
+
 module.exports = {
   payslipQuerySchema,
   updateEntrySchema,
@@ -59,4 +67,5 @@ module.exports = {
   disburseSchema,
   historyQuerySchema,
   ledgerQuerySchema,
+  financialSummaryQuerySchema,
 };

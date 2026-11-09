@@ -1251,6 +1251,345 @@ class PayrollLedgerService {
     return { total: entries.length, sent, failed, errors };
   }
 
+  // ── API: GET /payroll/financial-summary (Section 2.9) ──
+  async getFinancialSummary({ periodType = 'monthly', year, month, company_id, company } = {}) {
+    const now = new Date();
+    const targetYear = year ? parseInt(year, 10) : now.getFullYear();
+    const targetMonth = month ? parseInt(month, 10) : (now.getMonth() + 1); // 1-indexed (1-12)
+
+    const allCompanies = await Company.findAll({
+      where: { is_active: true },
+      attributes: ['id', 'name', 'code'],
+      order: [['name', 'ASC']],
+    });
+
+    const matchesCompany = (emp) => {
+      if (!emp) return false;
+      const compId = emp.company_id || emp.company?.id;
+      const compName = emp.company?.name || emp.company_name;
+      const compCode = emp.company?.code;
+      if (company_id && company_id !== 'all' && company_id !== 'ALL') {
+        const cidNum = Number(company_id);
+        return (cidNum && compId === cidNum) || String(compId) === String(company_id) || compName === String(company_id);
+      }
+      if (company && company !== 'All' && company !== 'ALL') {
+        const compLower = String(company).toLowerCase();
+        return (compName && compName.toLowerCase() === compLower) || (compCode && compCode.toLowerCase() === compLower);
+      }
+      return true;
+    };
+
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+
+    if (periodType === 'yearly') {
+      // ── YEARLY FINANCIAL SUMMARY ──
+      const cycles = await PayrollCycle.findAll({
+        where: { year: targetYear },
+        include: [{
+          model: PayrollEntry,
+          as: 'entries',
+          include: [{
+            model: Employee,
+            as: 'employee',
+            include: [
+              { model: Office, as: 'office' },
+              { model: Company, as: 'company' },
+              { model: SalaryStructure, as: 'salaryStructures' }
+            ]
+          }]
+        }],
+        order: [['month_index', 'ASC']],
+      });
+
+      let totalAnnualCost = 0;
+      let totalAnnualGross = 0;
+      let totalAnnualDeductions = 0;
+      let totalAnnualNetPayout = 0;
+      let peakStaffCount = 0;
+      let totalDaysInYearWorking = 0;
+
+      const monthlySummaries = await Promise.all(cycles.map(async (cycle) => {
+        const mIndex = cycle.month_index;
+        const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(mIndex + 1, targetYear);
+        totalDaysInYearWorking += dynamicDays;
+
+        let mGross = 0;
+        let mNet = 0;
+        let mDeductions = 0;
+        let mCompanyCost = 0;
+        let mStaff = 0;
+
+        for (const entry of (cycle.entries || [])) {
+          const emp = entry.employee;
+          if (!emp || !matchesCompany(emp)) continue;
+
+          const activeStructure = emp.salaryStructures?.find(s => s.status === 'active');
+          const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : true;
+          const calc = this._calculateRow({
+            ...emp.toJSON(),
+            ...entry.toJSON(),
+            fixed_gross: activeStructure?.fixed_gross || emp.fixed_gross,
+            pf_applicable: activeStructure ? activeStructure.pf_applicable : emp.pf_applicable,
+            pf_ceiling: activeStructure ? activeStructure.pf_ceiling : emp.pf_ceiling,
+            esic_applicable: activeStructure ? activeStructure.esic_applicable : emp.esic_applicable,
+            pt_applicable: ptApplicable,
+            hra_applicable: activeStructure ? activeStructure.hra_applicable : (emp.hra_applicable !== false),
+          }, dynamicDays);
+
+          mGross += calc.proratedGross;
+          mNet += calc.net;
+          mDeductions += calc.grossDeductions;
+          mCompanyCost += calc.totalMonthlyCTC;
+          mStaff += 1;
+        }
+
+        totalAnnualGross += mGross;
+        totalAnnualNetPayout += mNet;
+        totalAnnualDeductions += mDeductions;
+        totalAnnualCost += mCompanyCost;
+        if (mStaff > peakStaffCount) peakStaffCount = mStaff;
+
+        return {
+          monthIndex: mIndex,
+          monthName: monthNames[mIndex],
+          label: `${monthNames[mIndex]} ${targetYear}`,
+          staffCount: mStaff,
+          grossSalary: Math.round(mGross),
+          deductions: Math.round(mDeductions),
+          netPayout: Math.round(mNet),
+          companyCost: Math.round(mCompanyCost),
+          costPerDay: dynamicDays > 0 ? Math.round(mCompanyCost / dynamicDays) : 0,
+          status: cycle.status,
+        };
+      }));
+
+      const activeEmployees = await Employee.findAll({
+        where: { status: 'active', role: { [Op.ne]: 'admin' } },
+        include: [{ model: Office, as: 'office' }, { model: Company, as: 'company' }, { model: SalaryStructure, as: 'salaryStructures' }]
+      });
+      const filteredActive = activeEmployees.filter(matchesCompany);
+
+      let currentMonthlyCTC = 0;
+      filteredActive.forEach(emp => {
+        const str = emp.salaryStructures?.find(s => s.status === 'active');
+        const gross = Number(str?.fixed_gross || emp.fixed_gross || 0);
+        currentMonthlyCTC += (gross * 1.15);
+      });
+      const currentDailyCost = Math.round(currentMonthlyCTC / 26);
+
+      const monthsCount = Math.max(1, cycles.length);
+      const avgMonthlyBurn = Math.round(totalAnnualCost / monthsCount);
+      const avgCostPerDay = totalDaysInYearWorking > 0 ? Math.round(totalAnnualCost / totalDaysInYearWorking) : currentDailyCost;
+
+      return {
+        periodType: 'yearly',
+        year: targetYear,
+        metrics: {
+          companyCostPerDay: avgCostPerDay || currentDailyCost,
+          generatedPayout: Math.round(totalAnnualNetPayout),
+          projectedPayout: Math.round(totalAnnualNetPayout + (avgMonthlyBurn * Math.max(0, 12 - cycles.length))),
+          totalActiveStaff: filteredActive.length,
+          totalAnnualCost: Math.round(totalAnnualCost),
+          totalAnnualGross: Math.round(totalAnnualGross),
+          totalAnnualDeductions: Math.round(totalAnnualDeductions),
+          totalAnnualNetPayout: Math.round(totalAnnualNetPayout),
+          averageMonthlyBurn: avgMonthlyBurn,
+          peakStaffCount: Math.max(peakStaffCount, filteredActive.length),
+        },
+        monthlyBreakdown: monthlySummaries,
+        companies: allCompanies,
+      };
+    } else {
+      // ── MONTHLY FINANCIAL SUMMARY ──
+      const monthIndex = targetMonth - 1;
+      const isCurrentMonth = (now.getFullYear() === targetYear && now.getMonth() === monthIndex);
+
+      const { workingDays: dynamicDays, weekendDays, holidays } = await this._getDynamicDaysInMonth(targetMonth, targetYear);
+      const elapsedWorkingDays = isCurrentMonth
+        ? countElapsedWorkingDays(targetYear, targetMonth, now, null, weekendDays, holidays)
+        : dynamicDays;
+
+      const ptSlabs = await getPTSlabs();
+
+      let cycle = await PayrollCycle.findOne({
+        where: { month_index: monthIndex, year: targetYear },
+        include: [{
+          model: PayrollEntry,
+          as: 'entries',
+          include: [{
+            model: Employee,
+            as: 'employee',
+            include: [
+              { model: Office, as: 'office' },
+              { model: Company, as: 'company' },
+              { model: SalaryStructure, as: 'salaryStructures' }
+            ]
+          }]
+        }]
+      });
+
+      if (!cycle && isCurrentMonth) {
+        cycle = await this._createCycleForMonth(monthIndex, targetYear);
+        if (cycle) {
+          cycle = await PayrollCycle.findOne({
+            where: { month_index: monthIndex, year: targetYear },
+            include: [{
+              model: PayrollEntry,
+              as: 'entries',
+              include: [{
+                model: Employee,
+                as: 'employee',
+                include: [
+                  { model: Office, as: 'office' },
+                  { model: Company, as: 'company' },
+                  { model: SalaryStructure, as: 'salaryStructures' }
+                ]
+              }]
+            }]
+          });
+        }
+      }
+
+      const { MonthlyAttendance, Loan } = require('../models');
+      const monthlyStats = await MonthlyAttendance.findAll({
+        where: { month: targetMonth, year: targetYear },
+      });
+      const monthlyMap = new Map(monthlyStats.map(m => [m.employee_id, m]));
+
+      const activeLoans = await Loan.findAll({ where: { status: 'active' } });
+      const loanMap = new Map();
+      activeLoans.forEach(loan => {
+        const cur = loanMap.get(loan.employee_id) || 0;
+        loanMap.set(loan.employee_id, cur + Number(loan.emi_amount));
+      });
+
+      const entries = cycle ? (cycle.entries || []) : [];
+      let totalDailyCost = 0;
+      let totalGeneratedPayout = 0;
+      let totalProjectedPayout = 0;
+      let totalGrossSalary = 0;
+      let totalDeductions = 0;
+      let totalMonthlyCost = 0;
+      const employeeBreakdown = [];
+
+      for (const entry of entries) {
+        const emp = entry.employee;
+        if (!emp || !matchesCompany(emp)) continue;
+
+        const monthly = monthlyMap.get(emp.id);
+        const absentDays = monthly
+          ? (Number(monthly.absent_days) + Number(monthly.half_days) * 0.5)
+          : (entry.absent_days || 0);
+
+        const syncedLoan = loanMap.get(emp.id);
+        const loanDeduction = syncedLoan !== undefined ? syncedLoan : (Number(entry.loan_deduction) || 0);
+
+        const activeStructure = emp.salaryStructures?.find(s => s.status === 'active');
+        const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : true;
+
+        const baseData = {
+          ...emp.toJSON(),
+          ...entry.toJSON(),
+          loan_deduction: loanDeduction,
+          fixed_gross: activeStructure?.fixed_gross || emp.fixed_gross,
+          pf_applicable: activeStructure ? activeStructure.pf_applicable : emp.pf_applicable,
+          pf_ceiling: activeStructure ? activeStructure.pf_ceiling : emp.pf_ceiling,
+          esic_applicable: activeStructure ? activeStructure.esic_applicable : emp.esic_applicable,
+          pt_applicable: ptApplicable,
+          hra_applicable: activeStructure ? activeStructure.hra_applicable : (emp.hra_applicable !== false),
+          conveyance: activeStructure?.conveyance || 0,
+          medical_allowance: activeStructure?.medical_allowance || 0,
+          special_allowance: activeStructure?.special_allowance || 0,
+          performance_allowance: activeStructure?.performance_allowance || emp.performance_allowance || 0,
+          absent_days: absentDays,
+          weekly_off_worked_days: monthly ? Number(monthly.weekly_off_worked_days || 0) : 0,
+        };
+
+        const calcTillToday = this._calculateRow({
+          ...baseData,
+          _elapsedDays: elapsedWorkingDays,
+        }, dynamicDays, ptSlabs);
+
+        const calcProjected = this._calculateRow({
+          ...baseData,
+          _elapsedDays: dynamicDays,
+        }, dynamicDays, ptSlabs);
+
+        const projectedMonthlyCTC = calcProjected.totalMonthlyCTC;
+        const dailyCost = Math.round(projectedMonthlyCTC / dynamicDays);
+        const payableDays = Math.max(0, elapsedWorkingDays - absentDays);
+
+        totalDailyCost += dailyCost;
+        totalGeneratedPayout += calcTillToday.net;
+        totalProjectedPayout += calcProjected.net;
+        totalGrossSalary += calcTillToday.proratedGross;
+        totalDeductions += calcTillToday.grossDeductions;
+        totalMonthlyCost += calcTillToday.totalMonthlyCTC;
+
+        const compId = emp.company_id || emp.company?.id || null;
+        const compName = emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+        const compCode = emp.company?.code || (emp.emp_code ? String(emp.emp_code).replace(/[0-9]/g, '') : 'APA');
+
+        employeeBreakdown.push({
+          id: entry.id,
+          employeeId: emp.id,
+          employeeCode: emp.emp_code,
+          name: emp.name,
+          designation: emp.designation || 'Staff',
+          location: emp.location || emp.office?.name || 'Unknown',
+          company: compName,
+          companyCode: compCode,
+          fixedGross: Number(emp.fixed_gross) || 0,
+          dailyCost,
+          payableDays,
+          dynamicDays,
+          elapsedDays: elapsedWorkingDays,
+          generatedPayout: calcTillToday.net,
+          projectedMonthly: calcProjected.net,
+          monthlyCTC: calcTillToday.totalMonthlyCTC,
+          status: entry.status || cycle?.status || 'Draft',
+        });
+      }
+
+      const recentCycles = await PayrollCycle.findAll({
+        where: { year: targetYear },
+        order: [['month_index', 'ASC']],
+      });
+
+      const trend = recentCycles.map(c => ({
+        monthIndex: c.month_index,
+        monthName: monthNames[c.month_index],
+        status: c.status,
+      }));
+
+      return {
+        periodType: 'monthly',
+        year: targetYear,
+        month: targetMonth,
+        monthName: `${monthNames[monthIndex]} ${targetYear}`,
+        isCurrentMonth,
+        elapsedWorkingDays,
+        dynamicDays,
+        metrics: {
+          companyCostPerDay: Math.round(totalDailyCost),
+          generatedPayout: Math.round(totalGeneratedPayout),
+          projectedPayout: Math.round(totalProjectedPayout),
+          totalActiveStaff: employeeBreakdown.length,
+          totalGrossSalary: Math.round(totalGrossSalary),
+          totalDeductions: Math.round(totalDeductions),
+          totalNetPayable: Math.round(totalGeneratedPayout),
+          totalMonthlyCost: Math.round(totalMonthlyCost),
+        },
+        employees: employeeBreakdown,
+        companies: allCompanies,
+        trend,
+      };
+    }
+  }
+
   // ── Internal: auto-create a cycle for the current month ──
 
   async _createCycleForMonth(monthIndex, year) {

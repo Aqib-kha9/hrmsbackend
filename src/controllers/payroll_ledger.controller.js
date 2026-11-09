@@ -28,6 +28,18 @@ class PayrollLedgerController {
     }
   }
 
+  // ── GET /payroll/financial-summary (Section 2.9) ──
+  async getFinancialSummary(req, res, next) {
+    try {
+      const { periodType, year, month, company_id, company } = req.query;
+      const result = await payrollLedgerService.getFinancialSummary({ periodType, year, month, company_id, company });
+      return success(res, 'Financial summary fetched successfully', result, 200);
+    } catch (err) {
+      logger.error(`[PayrollLedger] getFinancialSummary error: ${err.message}`);
+      return next(err);
+    }
+  }
+
   // ── GET /payroll/history — past cycles summary ──
   async getCycleHistory(req, res, next) {
     try {
