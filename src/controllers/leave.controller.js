@@ -110,10 +110,53 @@ class LeaveController {
   async getEmployeeLeaveHistory(req, res, next) {
     try {
       const { employeeId } = req.params;
-      const result = await leaveService.getEmployeeLeaveHistory(employeeId);
+      const { year, month } = req.query;
+      const result = await leaveService.getEmployeeLeaveHistory(employeeId, { year, month });
       return success(res, 'Employee leave history fetched successfully', result, 200);
     } catch (err) {
       logger.error(`Get employee leave history error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async getAllEmployeesLeaveSummary(req, res, next) {
+    try {
+      const { year, department, search, month, page, limit } = req.query;
+      const result = await leaveService.getAllEmployeesLeaveSummary({ year, department, search, month, page, limit });
+      return paginated(res, 'Employees leave summary fetched successfully', result.data, result.pagination, 200);
+    } catch (err) {
+      logger.error(`Get all employees leave summary error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async getLeavePolicy(req, res, next) {
+    try {
+      const result = await leaveService.getLeavePolicy();
+      return success(res, 'Leave policy fetched successfully', result, 200);
+    } catch (err) {
+      logger.error(`Get leave policy error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async updateLeavePolicy(req, res, next) {
+    try {
+      const result = await leaveService.updateLeavePolicy(req.body);
+      return success(res, 'Leave policy updated successfully', result, 200);
+    } catch (err) {
+      logger.error(`Update leave policy error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async applyYearEndRollover(req, res, next) {
+    try {
+      const { fromYear, toYear } = req.body;
+      const result = await leaveService.applyYearEndRollover({ fromYear, toYear });
+      return success(res, result.message, result, 200);
+    } catch (err) {
+      logger.error(`Apply year-end rollover error: ${err.message}`);
       return next(err);
     }
   }

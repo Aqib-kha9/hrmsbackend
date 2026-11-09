@@ -17,18 +17,28 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
     defaultValue: () => new Date().getFullYear(),
     comment: 'Calendar/Entitlement year (e.g. 2026)',
   },
-  // ── Casual Leave (CL): 12 days per year, no carry forward ──
-  cl_allocated: {
+  // ── Privilege Leave (PL): 12 days per year, carry forward permitted (Req 2.6) ──
+  pl_allocated: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 12.00,
-    comment: 'Annual Casual Leave allocation (12 days/year)',
+    comment: 'Annual Privilege Leave allocation (12 days/year)',
   },
-  cl_used: {
+  pl_carried_forward: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Casual Leave days consumed in the year',
+    comment: 'Privilege Leave carried forward from previous year',
   },
-  // ── Earned Leave (EL): 12 days per year, carry forward permitted ──
+  pl_used: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Privilege Leave days consumed in the year',
+  },
+  pl_lapsed: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Privilege Leave days lapsed in excess of carry-forward policy',
+  },
+  // ── Earned Leave (EL): 12 days per year, carry forward permitted (Req 2.6) ──
   el_allocated: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 12.00,
@@ -44,6 +54,32 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
     defaultValue: 0.00,
     comment: 'Earned Leave days consumed in the year',
   },
+  el_lapsed: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Earned Leave days lapsed in excess of carry-forward policy',
+  },
+  // ── Casual Leave (CL): 12 days per year, lapses annually (Req 2.6) ──
+  cl_allocated: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 12.00,
+    comment: 'Annual Casual Leave allocation (12 days/year)',
+  },
+  cl_carried_forward: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Casual Leave carried forward (always 0.00, CL lapses annually)',
+  },
+  cl_used: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Casual Leave days consumed in the year',
+  },
+  cl_lapsed: {
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 0.00,
+    comment: 'Casual Leave days lapsed at year-end',
+  },
   // ── Compensatory Off (Comp-Off): Earned for Sunday / Weekly Off worked (Req 2.5 D) ──
   comp_off_balance: {
     type: DataTypes.DECIMAL(5, 2),
@@ -53,8 +89,8 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
   // ── Legacy fields for backward compatibility ──
   available: {
     type: DataTypes.INTEGER,
-    defaultValue: 24,
-    comment: 'Legacy available leave balance',
+    defaultValue: 36,
+    comment: 'Legacy available leave balance (12 PL + 12 EL + 12 CL = 36 days)',
   },
   used: {
     type: DataTypes.INTEGER,

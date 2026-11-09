@@ -1,10 +1,12 @@
 const Joi = require('joi');
 
 const applyLeaveSchema = Joi.object({
-  leave_type: Joi.string().valid('cl', 'el', 'lwp', 'other').default('cl'),
+  leave_type: Joi.string().valid('pl', 'el', 'cl', 'lwp', 'comp_off', 'other').default('cl'),
   employee_id: Joi.number().integer().optional().messages({
     'number.base': 'Employee ID must be a valid number',
   }),
+  is_half_day: Joi.boolean().optional(),
+  half_day_session: Joi.string().valid('first_half', 'second_half').optional(),
   from_date: Joi.string().custom((value, helpers) => {
     const d = new Date(value);
     if (isNaN(d.getTime())) {
@@ -91,9 +93,53 @@ const leaveQuerySchema = Joi.object({
   limit: Joi.number().integer().min(1).max(100).default(20),
 });
 
+const leaveHistoryQuerySchema = Joi.object({
+  year: Joi.number().integer().min(2020).max(2050).optional(),
+  month: Joi.number().integer().min(1).max(12).optional(),
+});
+
+const leaveSummaryQuerySchema = Joi.object({
+  year: Joi.number().integer().min(2020).max(2050).optional(),
+  department: Joi.string().allow('').optional(),
+  search: Joi.string().allow('').optional(),
+  month: Joi.number().integer().min(1).max(12).optional(),
+  page: Joi.number().integer().min(1).default(1),
+  limit: Joi.number().integer().min(1).max(200).default(50),
+});
+
+const leavePolicySchema = Joi.object({
+  pl: Joi.object({
+    entitlement: Joi.number().min(0).max(60).default(12),
+    carry_forward: Joi.boolean().default(true),
+    max_carry_forward: Joi.number().min(0).max(60).default(15),
+    lapse: Joi.boolean().default(false),
+  }).optional(),
+  el: Joi.object({
+    entitlement: Joi.number().min(0).max(60).default(12),
+    carry_forward: Joi.boolean().default(true),
+    max_carry_forward: Joi.number().min(0).max(60).default(30),
+    lapse: Joi.boolean().default(false),
+  }).optional(),
+  cl: Joi.object({
+    entitlement: Joi.number().min(0).max(60).default(12),
+    carry_forward: Joi.boolean().default(false),
+    max_carry_forward: Joi.number().min(0).max(0).default(0),
+    lapse: Joi.boolean().default(true),
+  }).optional(),
+});
+
+const rolloverSchema = Joi.object({
+  fromYear: Joi.number().integer().min(2020).max(2050).optional(),
+  toYear: Joi.number().integer().min(2020).max(2050).optional(),
+});
+
 module.exports = {
   applyLeaveSchema,
   approveLeaveSchema,
   grantLeaveSchema,
   leaveQuerySchema,
+  leaveHistoryQuerySchema,
+  leaveSummaryQuerySchema,
+  leavePolicySchema,
+  rolloverSchema,
 };

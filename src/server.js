@@ -107,6 +107,12 @@ async function startServer() {
       // Table or column may not exist yet
     }
 
+    try {
+      await sequelize.query("ALTER TABLE `leave_requests` MODIFY COLUMN `leave_type` VARCHAR(20) NOT NULL DEFAULT 'cl';");
+    } catch (e) {
+      // Table or column may not exist yet
+    }
+
     // Sync models (alter: true adds missing columns without data loss)
     const forceSync = process.env.DB_SYNC_FORCE === 'true';
     const alterSync = process.env.DB_SYNC_ALTER === 'true';

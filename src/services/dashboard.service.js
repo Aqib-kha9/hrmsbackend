@@ -455,46 +455,58 @@ class DashboardService {
       active_tours: activeToursCount,
     };
 
-    // 8. Annual Leave Policy & Entitlements (Requirement 2.1: Leave entitlements according to finalized annual leave policy)
-    // 12 Casual Leave (CL) + 12 Earned Leave (EL) = 24 days annual entitlement
+    // 8. Annual Leave Policy & Entitlements (Requirement 2.1 & 2.6: Leave entitlements according to finalized annual leave policy)
+    // 12 Privilege Leave (PL) + 12 Earned Leave (EL) + 12 Casual Leave (CL) = 36 days annual entitlement
     const balanceAgg = await LeaveBalance.findAll({
       attributes: [
-        [sequelize.fn('SUM', sequelize.col('cl_allocated')), 'sum_cl_allocated'],
-        [sequelize.fn('SUM', sequelize.col('cl_used')), 'sum_cl_used'],
+        [sequelize.fn('SUM', sequelize.col('pl_allocated')), 'sum_pl_allocated'],
+        [sequelize.fn('SUM', sequelize.col('pl_carried_forward')), 'sum_pl_cf'],
+        [sequelize.fn('SUM', sequelize.col('pl_used')), 'sum_pl_used'],
         [sequelize.fn('SUM', sequelize.col('el_allocated')), 'sum_el_allocated'],
         [sequelize.fn('SUM', sequelize.col('el_carried_forward')), 'sum_el_cf'],
         [sequelize.fn('SUM', sequelize.col('el_used')), 'sum_el_used'],
+        [sequelize.fn('SUM', sequelize.col('cl_allocated')), 'sum_cl_allocated'],
+        [sequelize.fn('SUM', sequelize.col('cl_used')), 'sum_cl_used'],
       ],
       raw: true,
     }).catch(() => [{}]);
 
     const b = balanceAgg[0] || {};
-    const clAlloc = parseFloat(b.sum_cl_allocated) || (activeEmployees * 12);
-    const clUsed = parseFloat(b.sum_cl_used) || 0;
+    const plAlloc = parseFloat(b.sum_pl_allocated) || (activeEmployees * 12);
+    const plCf = parseFloat(b.sum_pl_cf) || 0;
+    const plUsed = parseFloat(b.sum_pl_used) || 0;
     const elAlloc = parseFloat(b.sum_el_allocated) || (activeEmployees * 12);
     const elCf = parseFloat(b.sum_el_cf) || 0;
     const elUsed = parseFloat(b.sum_el_used) || 0;
+    const clAlloc = parseFloat(b.sum_cl_allocated) || (activeEmployees * 12);
+    const clUsed = parseFloat(b.sum_cl_used) || 0;
 
     const annualLeavePolicy = {
-      policy_name: 'Annual Leave Policy (12 CL + 12 EL = 24 Days/Year)',
-      annual_cl_days: 12,
+      policy_name: 'Annual Leave Policy (12 PL + 12 EL + 12 CL = 36 Days/Year)',
+      annual_pl_days: 12,
       annual_el_days: 12,
-      total_annual_days: 24,
+      annual_cl_days: 12,
+      total_annual_days: 36,
       rules: {
-        cl: 'Casual Leave (12 days): Annual reset, no carry forward.',
-        el: 'Earned Leave (12 days): Accumulative, carry forward permitted per policy.',
+        pl: 'Privilege Leave (12 days): Carry-forward enabled per approved company policy.',
+        el: 'Earned Leave (12 days): Carry-forward enabled per approved company policy.',
+        cl: 'Casual Leave (12 days): Annual reset / lapse at year-end, no carry-forward.',
       },
       company_totals: {
-        cl_allocated: clAlloc,
-        cl_used: clUsed,
-        cl_balance: Math.max(0, clAlloc - clUsed),
+        pl_allocated: plAlloc,
+        pl_carried_forward: plCf,
+        pl_used: plUsed,
+        pl_balance: Math.max(0, (plAlloc + plCf) - plUsed),
         el_allocated: elAlloc,
         el_carried_forward: elCf,
         el_used: elUsed,
         el_balance: Math.max(0, (elAlloc + elCf) - elUsed),
-        total_allocated: clAlloc + elAlloc + elCf,
-        total_used: clUsed + elUsed,
-        total_balance: Math.max(0, (clAlloc + elAlloc + elCf) - (clUsed + elUsed)),
+        cl_allocated: clAlloc,
+        cl_used: clUsed,
+        cl_balance: Math.max(0, clAlloc - clUsed),
+        total_allocated: plAlloc + plCf + elAlloc + elCf + clAlloc,
+        total_used: plUsed + elUsed + clUsed,
+        total_balance: Math.max(0, (plAlloc + plCf + elAlloc + elCf + clAlloc) - (plUsed + elUsed + clUsed)),
       },
     };
 

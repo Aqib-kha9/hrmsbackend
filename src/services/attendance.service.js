@@ -1453,19 +1453,24 @@ class AttendanceService {
         dObj.setDate(dObj.getDate() + 1);
       }
 
-      // Compute remaining leave balance from LeaveBalance model
+      // Compute remaining leave balance from LeaveBalance model (Req 2.6: PL + EL + CL + Comp-Off)
       const bal = balanceMap.get(emp.id);
-      const clAlloc = bal ? Number(bal.cl_allocated || 12) : 12;
-      const clUsed = bal ? Number(bal.cl_used || 0) : 0;
-      const clRem = Math.max(0, clAlloc - clUsed);
+      const plAlloc = bal ? Number(bal.pl_allocated != null ? bal.pl_allocated : 12) : 12;
+      const plCarr = bal ? Number(bal.pl_carried_forward || 0) : 0;
+      const plUsed = bal ? Number(bal.pl_used || 0) : 0;
+      const plRem = Math.max(0, (plAlloc + plCarr) - plUsed);
 
-      const elAlloc = bal ? Number(bal.el_allocated || 12) : 12;
+      const elAlloc = bal ? Number(bal.el_allocated != null ? bal.el_allocated : 12) : 12;
       const elCarr = bal ? Number(bal.el_carried_forward || 0) : 0;
       const elUsed = bal ? Number(bal.el_used || 0) : 0;
       const elRem = Math.max(0, (elAlloc + elCarr) - elUsed);
 
+      const clAlloc = bal ? Number(bal.cl_allocated != null ? bal.cl_allocated : 12) : 12;
+      const clUsed = bal ? Number(bal.cl_used || 0) : 0;
+      const clRem = Math.max(0, clAlloc - clUsed);
+
       const compOffBal = bal ? Number(bal.comp_off_balance || 0) : 0;
-      const remainingBalance = Math.round((clRem + elRem + compOffBal) * 100) / 100;
+      const remainingBalance = Math.round((plRem + elRem + clRem + compOffBal) * 100) / 100;
 
       const totalLeavesTaken = paidLeaveCount + absentCount;
       const payableDays = presentCount + (halfDayCount * 0.5) + woffCount + holidayCount + tourCount + paidLeaveCount + weeklyOffWorkedCompDays;
@@ -1945,12 +1950,13 @@ class AttendanceService {
     const payableDays = presentDays + (halfDays * 0.5) + weekendDaysCount + holidayDaysCount + paidLeavesCount + tourDays + weeklyOffWorkedCompDays;
     const totalLeavesTaken = paidLeavesCount + absentDays;
 
-    // Fetch live LeaveBalance for this employee
+    // Fetch live LeaveBalance for this employee (Req 2.6: PL + EL + CL + Comp-Off)
     const lb = await LeaveBalance.findOne({ where: { employee_id: employeeId, year } });
-    const clBal = lb ? Math.max(0, Number(lb.cl_allocated || 12) - Number(lb.cl_used || 0)) : 12;
-    const elBal = lb ? Math.max(0, (Number(lb.el_allocated || 12) + Number(lb.el_carried_forward || 0)) - Number(lb.el_used || 0)) : 12;
+    const plBal = lb ? Math.max(0, (Number(lb.pl_allocated != null ? lb.pl_allocated : 12) + Number(lb.pl_carried_forward || 0)) - Number(lb.pl_used || 0)) : 12;
+    const elBal = lb ? Math.max(0, (Number(lb.el_allocated != null ? lb.el_allocated : 12) + Number(lb.el_carried_forward || 0)) - Number(lb.el_used || 0)) : 12;
+    const clBal = lb ? Math.max(0, Number(lb.cl_allocated != null ? lb.cl_allocated : 12) - Number(lb.cl_used || 0)) : 12;
     const compOffBal = lb ? Number(lb.comp_off_balance || 0) : 0;
-    const remainingLeaveBalance = Math.round((clBal + elBal + compOffBal) * 100) / 100;
+    const remainingLeaveBalance = Math.round((plBal + elBal + clBal + compOffBal) * 100) / 100;
 
     await MonthlyAttendance.upsert({
       employee_id: employeeId,
