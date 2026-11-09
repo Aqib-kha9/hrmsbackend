@@ -303,6 +303,7 @@ class OnboardingInvitationService {
       address: overrides.address || data.address || null,
       designation: overrides.designation || data.designation || invite.designation || 'Executive',
       department: overrides.department || data.department || invite.department || 'Operations',
+      hr_manager: overrides.hr_manager || data.hr_manager || null,
       role: overrides.role || data.role || 'employee',
       date_of_joining: overrides.date_of_joining || data.date_of_joining || new Date().toISOString().split('T')[0],
       office_id: overrides.office_id || data.office_id || invite.office_id,

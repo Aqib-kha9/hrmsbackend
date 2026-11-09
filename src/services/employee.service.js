@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const {
   Employee,
+  Company,
   Office,
   SalaryStructure,
   SalaryRevision,
@@ -101,7 +102,23 @@ class EmployeeService {
     delete updateData.password;
     delete updateData.refresh_token;
     delete updateData.role; // Role changes through separate endpoint
-    delete updateData.emp_code; // Emp code is immutable
+
+    // Validate and allow updating emp_code with strict uniqueness check (Req 2.2)
+    if (updateData.emp_code && updateData.emp_code.trim().toUpperCase() !== employee.emp_code) {
+      const newCode = updateData.emp_code.trim().toUpperCase();
+      const existing = await Employee.findOne({
+        where: {
+          emp_code: newCode,
+          id: { [Op.ne]: employeeId },
+        },
+      });
+      if (existing) {
+        throw new AppError(`Employee ID "${newCode}" is already in use by another employee (${existing.name}). Employee IDs must be unique within the identification scheme.`, 409);
+      }
+      updateData.emp_code = newCode;
+    } else {
+      delete updateData.emp_code;
+    }
 
     // Sync denormalized text fields if foreign keys changed
     if (updateData.office_id && updateData.office_id !== employee.office_id) {
@@ -460,18 +477,60 @@ class EmployeeService {
   }
 
   /**
-   * Automatic Sequential Employee ID Generator (Req 1.2)
-   * Follows sequential numbering system (e.g. EMP456 → EMP457 → EMP458).
-   * Guarantees no duplicate or inconsistent codes across all modules.
+   * Company-Specific Sequential Employee ID Generator Details (Req 2.2)
+   * Follows company-specific identification format: Company prefix followed by unique sequential identifier (e.g. APA001).
+   * Ensures IDs are unique across the system and sequence is maintained per prefix.
    */
-  async getNextEmployeeCode(prefix = 'EMP') {
+  async getNextEmployeeCodeDetails(target = null) {
+    let prefix = 'APA';
+    let company = null;
+
+    if (target) {
+      if (typeof target === 'number' || /^\d+$/.test(String(target).trim())) {
+        const compId = parseInt(target, 10);
+        company = await Company.findByPk(compId);
+        if (company) {
+          prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+        }
+      } else if (typeof target === 'string') {
+        const clean = target.trim();
+        if (/^\d+$/.test(clean)) {
+          company = await Company.findByPk(parseInt(clean, 10));
+          if (company) {
+            prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+          }
+        } else {
+          prefix = clean.toUpperCase();
+        }
+      } else if (typeof target === 'object') {
+        if (target.companyId || target.company_id) {
+          const compId = parseInt(target.companyId || target.company_id, 10);
+          company = await Company.findByPk(compId);
+          if (company) {
+            prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+          }
+        }
+        if (target.prefix) {
+          prefix = String(target.prefix).trim().toUpperCase();
+        }
+      }
+    } else {
+      const defaultCompany = await Company.findOne({ where: { is_active: true }, order: [['id', 'ASC']] });
+      if (defaultCompany) {
+        prefix = (defaultCompany.code || this.deriveCompanyPrefix(defaultCompany.name) || 'APA').trim().toUpperCase();
+        company = defaultCompany;
+      }
+    }
+
+    if (!prefix || prefix.length === 0) prefix = 'APA';
+
     const employees = await Employee.findAll({
       attributes: ['emp_code'],
       raw: true,
     });
 
     let maxNum = 0;
-    const prefixRegex = new RegExp(`^${prefix}(\\d+)$`, 'i');
+    const prefixRegex = new RegExp(`^${prefix}[-_]?(\\d+)$`, 'i');
 
     for (const emp of employees) {
       if (!emp.emp_code) continue;
@@ -484,9 +543,45 @@ class EmployeeService {
       }
     }
 
-    const nextNum = maxNum > 0 ? maxNum + 1 : 101; // default start at EMP101 if fresh
+    // Standard sequence starts at 1, formatted as 3-digit zero-padded number (e.g. APA001)
+    const nextNum = maxNum > 0 ? maxNum + 1 : 1;
     const padded = String(nextNum).padStart(3, '0');
-    return `${prefix}${padded}`;
+    const nextCode = `${prefix}${padded}`;
+
+    return {
+      next_emp_code: nextCode,
+      nextCode,
+      prefix,
+      sequence_number: nextNum,
+      company_id: company ? company.id : null,
+      company_name: company ? company.name : null,
+      format_example: `${prefix}001`,
+    };
+  }
+
+  deriveCompanyPrefix(name) {
+    if (!name) return 'APA';
+    const clean = name.trim();
+    if (/^apaar/i.test(clean)) return 'APA';
+    if (/^bp\s*marketing/i.test(clean)) return 'BPM';
+    if (/^ae\b/i.test(clean)) return 'AE';
+    if (/^pj\b/i.test(clean)) return 'PJ';
+
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const acronym = words.map(w => w[0].toUpperCase()).join('').slice(0, 4);
+      if (acronym.length >= 2) return acronym;
+    }
+    return clean.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'APA';
+  }
+
+  /**
+   * Automatic Sequential Employee ID Generator (Req 1.2 & Req 2.2)
+   * Returns formatted code string directly for backward compatibility.
+   */
+  async getNextEmployeeCode(companyIdOrPrefix = null) {
+    const details = await this.getNextEmployeeCodeDetails(companyIdOrPrefix);
+    return details.next_emp_code;
   }
 
   /**

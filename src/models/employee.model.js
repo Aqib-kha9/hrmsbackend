@@ -38,6 +38,11 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(80),
     allowNull: true,
   },
+  hr_manager: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    comment: 'Assigned HR Manager / Reporting Manager name',
+  },
   role_id: {
     type: DataTypes.INTEGER,
     allowNull: true,

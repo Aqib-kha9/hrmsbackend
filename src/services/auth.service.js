@@ -178,21 +178,31 @@ class AuthService {
       }
     }
 
-    // Automatic Sequential Employee ID fallback (Req 1.2)
-    let empCode = employeeData.emp_code;
-    if (!empCode || empCode.trim() === '' || empCode.startsWith('TEMP')) {
-      const employeeService = require('./employee.service');
-      empCode = await employeeService.getNextEmployeeCode('EMP');
+    // Automatic Sequential Company-Specific Employee ID (Req 2.2)
+    let empCode = employeeData.emp_code ? employeeData.emp_code.trim().toUpperCase() : null;
+    const companyId = employeeData.company_id;
+    const employeeService = require('./employee.service');
+
+    if (!empCode || empCode === '' || empCode.startsWith('TEMP')) {
+      empCode = await employeeService.getNextEmployeeCode(companyId);
     }
 
     const existingCode = await Employee.findOne({
-      where: { emp_code: empCode },
+      where: sequelize.where(
+        sequelize.fn('LOWER', sequelize.col('emp_code')),
+        empCode.toLowerCase()
+      ),
     });
 
     if (existingCode) {
-      // If code already taken, get next sequential code automatically
-      const employeeService = require('./employee.service');
-      empCode = await employeeService.getNextEmployeeCode('EMP');
+      if (!employeeData.emp_code || employeeData.emp_code.trim() === '' || employeeData.emp_code.startsWith('TEMP')) {
+        empCode = await employeeService.getNextEmployeeCode(companyId);
+      } else {
+        throw new AppError(
+          `Employee ID "${empCode}" is already in use by another employee (${existingCode.name}). Employee IDs must be unique within the identification scheme.`,
+          409
+        );
+      }
     }
 
     const plainPassword = employeeData.password || 'Welcome@123';
@@ -219,6 +229,7 @@ class AuthService {
           password: hashedPassword,
           designation: employeeData.designation,
           department: employeeData.department,
+          hr_manager: employeeData.hr_manager || employeeData.hrManager || null,
           role: employeeData.role || 'employee',
           date_of_joining: employeeData.date_of_joining,
           date_of_birth: employeeData.date_of_birth,

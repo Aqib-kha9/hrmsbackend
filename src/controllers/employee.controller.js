@@ -141,12 +141,12 @@ class EmployeeController {
     }
   }
 
-  // ── Sequential Employee ID (Req 1.2) ──
+  // ── Company-Specific Sequential Employee ID (Req 2.2) ──
   async getNextCode(req, res, next) {
     try {
-      const prefix = req.query.prefix || 'EMP';
-      const nextCode = await employeeService.getNextEmployeeCode(prefix);
-      return success(res, 'Next sequential employee code generated', { next_emp_code: nextCode, nextCode }, 200);
+      const target = req.query.company_id || req.query.companyId || req.query.prefix || null;
+      const result = await employeeService.getNextEmployeeCodeDetails(target);
+      return success(res, 'Next company-specific sequential employee code generated', result, 200);
     } catch (err) {
       logger.error(`Get next employee code error: ${err.message}`);
       return next(err);
