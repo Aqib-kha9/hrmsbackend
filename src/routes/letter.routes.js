@@ -24,6 +24,7 @@ router.delete('/:id', requirePermission('letters:delete'), letterController.dele
 router.get('/generate-pdf', requirePermission('letters:read'), letterController.generateLetterPDF);
 router.post('/generate-pdf', requirePermission('letters:create'), letterController.generateLetterPDF);
 router.post('/send-email', requirePermission('letters:create'), letterController.sendLetterEmail);
+router.post('/:id/send-email', requirePermission('letters:create'), letterController.sendExistingLetterEmail);
 
 // ── Offer letter specific routes (Admin/HR only) ──
 router.get('/offer-letter/:employeeId/preview', requirePermission('letters:read'), offerLetterController.previewOfferLetter);

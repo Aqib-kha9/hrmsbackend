@@ -27,7 +27,7 @@ const Letter = sequelize.define('Letter', {
     allowNull: true,
   },
   type: {
-    type: DataTypes.ENUM('offer', 'appointment', 'promotion', 'transfer', 'resignation', 'experience', 'relieving', 'warning'),
+    type: DataTypes.ENUM('offer', 'appointment', 'promotion', 'transfer', 'resignation', 'experience', 'relieving', 'warning', 'form16'),
     allowNull: false,
   },
   title: {

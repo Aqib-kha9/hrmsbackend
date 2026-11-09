@@ -210,6 +210,115 @@ class EmailService {
     logger.info(`Password reset email sent to ${employee.email} for emp_code ${employee.emp_code}`);
     return result;
   }
+
+  /**
+   * Send official employee letter email with PDF attachment.
+   * Supports Offer Letter, Relieving Letter, Appointment Letter, Form 16, etc. (Req 2.10)
+   *
+   * @param {object} params
+   * @param {string} params.to - Recipient registered email address
+   * @param {string} params.employeeName - Recipient full name
+   * @param {string} [params.empCode] - Employee code (or candidate)
+   * @param {string} params.letterTitle - Official letter title (e.g. Appointment Letter)
+   * @param {string} params.letterType - Type code (offer, appointment, relieving, form16, etc.)
+   * @param {string} [params.companyName] - Issuing company name
+   * @param {Buffer} params.pdfBuffer - Generated PDF attachment buffer
+   * @param {string} [params.customSubject] - Optional subject override
+   * @param {string} [params.customNote] - Optional notes from HR
+   */
+  async sendOfficialLetterEmail({ to, employeeName, empCode = '', letterTitle, letterType, companyName = 'Apaar Logistics & Cold Supply Chain Pvt Ltd', pdfBuffer, customSubject, customNote }) {
+    const subject = customSubject || `${letterTitle} — ${companyName}`;
+
+    let letterDescription = '';
+    let actionInstructions = '';
+
+    switch (letterType) {
+      case 'offer':
+        letterDescription = 'We are pleased to share your official Offer of Employment.';
+        actionInstructions = 'Please review the offered compensation details and joining terms. Kindly confirm your acceptance by replying to this email or acknowledging the offer in the HRMS portal.';
+        break;
+      case 'appointment':
+        letterDescription = 'We are pleased to issue your formal Appointment Letter confirming your employment.';
+        actionInstructions = 'Please review your appointment terms and detailed salary breakdown (Annexure A). You are requested to sign and return a copy for your employee records.';
+        break;
+      case 'relieving':
+        letterDescription = 'This letter formally confirms that you have been relieved from your duties.';
+        actionInstructions = 'All department clearances and handover formalities have been recorded. Full and final settlement details will follow as per company exit policy.';
+        break;
+      case 'form16':
+        letterDescription = 'Please find attached your Form 16 (Certificate under Section 203 of the Income-tax Act, 1961 for Tax Deducted at Source on Salary).';
+        actionInstructions = 'This document certifies the tax deducted and deposited into the Central Government account for the financial year. You may retain this certificate for filing your annual Income Tax Return (ITR).';
+        break;
+      default:
+        letterDescription = `Please find attached your official ${letterTitle}.`;
+        actionInstructions = 'Please keep this document safely for your official employment records.';
+    }
+
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; color: #1e293b; max-width: 620px; margin: 0 auto; background-color: #f8fafc; padding: 20px;">
+  <div style="background: #0f172a; color: #ffffff; padding: 24px 28px; text-align: center; border-radius: 12px 12px 0 0;">
+    <h1 style="margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">${companyName}</h1>
+    <p style="margin: 6px 0 0; font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Human Resources Department</p>
+  </div>
+  <div style="padding: 28px; background: #ffffff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+    <p style="font-size: 15px; margin-top: 0;">Dear <strong>${employeeName}</strong>,</p>
+    
+    <p style="font-size: 14px; line-height: 1.6; color: #334155;">
+      ${letterDescription}
+    </p>
+
+    <div style="background: #f1f5f9; border-left: 4px solid #0f172a; padding: 14px 18px; margin: 18px 0; border-radius: 0 8px 8px 0;">
+      <p style="margin: 0; font-size: 13px; font-weight: 700; color: #0f172a;">Document: ${letterTitle}</p>
+      ${empCode ? `<p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Employee Code: ${empCode}</p>` : ''}
+      <p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Date of Issue: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+    </div>
+
+    ${customNote ? `
+      <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 12px 16px; margin: 16px 0; border-radius: 6px; font-size: 13px; color: #92400e;">
+        <strong>Note from HR:</strong> ${customNote}
+      </div>
+    ` : ''}
+
+    <p style="font-size: 13.5px; line-height: 1.6; color: #475569;">
+      ${actionInstructions}
+    </p>
+
+    <p style="font-size: 13px; color: #64748b; margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9;">
+      The complete, officially signed document is attached to this email in PDF format.<br/>
+      If you have any questions or require clarifications, please contact the HR team.
+    </p>
+
+    <div style="margin-top: 24px; padding-top: 12px;">
+      <p style="margin: 0; font-size: 13px; font-weight: 700; color: #1e293b;">Warm regards,</p>
+      <p style="margin: 2px 0 0; font-size: 13px; font-weight: 600; color: #0f172a;">HR Operations Team</p>
+      <p style="margin: 2px 0 0; font-size: 12px; color: #64748b;">${companyName}</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const attachments = [];
+    if (pdfBuffer && pdfBuffer.length > 0) {
+      const sanitizedCode = empCode ? empCode.replace(/[^a-zA-Z0-9_-]/g, '') : 'document';
+      attachments.push({
+        filename: `${letterType}_${sanitizedCode}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      });
+    }
+
+    const result = await this.sendMail({
+      to,
+      subject,
+      html,
+      attachments,
+    });
+
+    logger.info(`Official ${letterType} letter email dispatched to registered email ${to} (emp: ${empCode || 'candidate'})`);
+    return result;
+  }
 }
 
 // Singleton

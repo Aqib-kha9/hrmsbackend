@@ -243,6 +243,46 @@ class LetterTemplateService {
     const net_annual = netTakeHome * 12;
     const ctc_annual = ctc * 12;
 
+    // Form 16 / Tax & Statutory calculations
+    const curYear = today.getFullYear();
+    const curMonth = today.getMonth() + 1; // 1-12
+    const fyStartYear = curMonth >= 4 ? curYear - 1 : curYear - 2;
+    const fyEndYear = fyStartYear + 1;
+    const ayStartYear = fyEndYear;
+    const ayEndYear = ayStartYear + 1;
+
+    const financialYear = `${fyStartYear}-${String(fyEndYear).slice(-2)}`;
+    const assessmentYear = `${ayStartYear}-${String(ayEndYear).slice(-2)}`;
+    const fyStartDate = `01-Apr-${fyStartYear}`;
+    const fyEndDate = `31-Mar-${fyEndYear}`;
+
+    const companyPan = employee.company?.pan || 'AAACA1234C';
+    const companyTan = employee.company?.tan || 'DELA12345B';
+    const employeePan = employee.pan_number || 'ABCDE1234F';
+
+    const hraExemption = hra_annual || 0;
+    const balanceSalary = Math.max(0, gross_annual - hraExemption);
+    const standardDeduction = gross_annual > 0 ? Math.min(50000, gross_annual) : 0;
+    const totalSec16 = standardDeduction + pt_annual;
+    const netSalaryIncome = Math.max(0, balanceSalary - totalSec16);
+    const chapterVia80C = Math.min(150000, pf_emp_annual);
+    const taxableIncome = Math.max(0, netSalaryIncome - chapterVia80C);
+
+    // Indicative tax calculation
+    let taxOnIncome = 0;
+    if (taxableIncome > 500000) {
+      taxOnIncome = Math.round((taxableIncome - 500000) * 0.20 + 12500);
+    } else if (taxableIncome > 250000) {
+      taxOnIncome = Math.round((taxableIncome - 250000) * 0.05);
+    }
+    const taxRebate = taxableIncome <= 500000 ? taxOnIncome : 0;
+    const taxAfterRebate = taxOnIncome - taxRebate;
+    const cess = Math.round(taxAfterRebate * 0.04);
+    const totalTaxPayable = taxAfterRebate + cess;
+
+    const qSalary = Math.round(gross_annual / 4);
+    const qTds = Math.round(totalTaxPayable / 4);
+
     const placeholders = {
       '[Employee_Name]': employee.name || '_______________',
       '[Employee_Code]': employee.emp_code || '_______________',
@@ -304,6 +344,36 @@ class LetterTemplateService {
       '[PAN]': employee.pan_number || '_______________',
       '[PF_Number]': employee.pf_number || '_______________',
       '[UAN]': employee.uan || '_______________',
+      '[Company_PAN]': companyPan,
+      '[Company_TAN]': companyTan,
+      '[Employee_PAN]': employeePan,
+      '[Financial_Year]': financialYear,
+      '[Assessment_Year]': assessmentYear,
+      '[Financial_Year_Start]': fyStartDate,
+      '[Financial_Year_End]': fyEndDate,
+      '[Salary_Q1]': gross_annual ? `₹ ${qSalary.toLocaleString('en-IN')}` : '₹ 0',
+      '[Salary_Q2]': gross_annual ? `₹ ${qSalary.toLocaleString('en-IN')}` : '₹ 0',
+      '[Salary_Q3]': gross_annual ? `₹ ${qSalary.toLocaleString('en-IN')}` : '₹ 0',
+      '[Salary_Q4]': gross_annual ? `₹ ${qSalary.toLocaleString('en-IN')}` : '₹ 0',
+      '[Receipt_Q1]': `TDS-${fyEndYear}-Q1`,
+      '[Receipt_Q2]': `TDS-${fyEndYear}-Q2`,
+      '[Receipt_Q3]': `TDS-${fyEndYear}-Q3`,
+      '[Receipt_Q4]': `TDS-${fyEndYear}-Q4`,
+      '[TDS_Q1]': totalTaxPayable ? `₹ ${qTds.toLocaleString('en-IN')}` : '₹ 0',
+      '[TDS_Q2]': totalTaxPayable ? `₹ ${qTds.toLocaleString('en-IN')}` : '₹ 0',
+      '[TDS_Q3]': totalTaxPayable ? `₹ ${qTds.toLocaleString('en-IN')}` : '₹ 0',
+      '[TDS_Q4]': totalTaxPayable ? `₹ ${qTds.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_TDS_Deducted]': totalTaxPayable ? `₹ ${totalTaxPayable.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_TDS_Deposited]': totalTaxPayable ? `₹ ${totalTaxPayable.toLocaleString('en-IN')}` : '₹ 0',
+      '[HRA_Exemption_Annual]': hraExemption ? `₹ ${hraExemption.toLocaleString('en-IN')}` : '₹ 0',
+      '[Balance_Salary]': balanceSalary ? `₹ ${balanceSalary.toLocaleString('en-IN')}` : '₹ 0',
+      '[Standard_Deduction]': standardDeduction ? `₹ ${standardDeduction.toLocaleString('en-IN')}` : '₹ 0',
+      '[Net_Salary_Income]': netSalaryIncome ? `₹ ${netSalaryIncome.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_Taxable_Income]': taxableIncome ? `₹ ${taxableIncome.toLocaleString('en-IN')}` : '₹ 0',
+      '[Tax_On_Income]': taxOnIncome ? `₹ ${taxOnIncome.toLocaleString('en-IN')}` : '₹ 0',
+      '[Tax_Rebate]': taxRebate ? `₹ ${taxRebate.toLocaleString('en-IN')}` : '₹ 0',
+      '[Health_Education_Cess]': cess ? `₹ ${cess.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_Tax_Payable]': totalTaxPayable ? `₹ ${totalTaxPayable.toLocaleString('en-IN')}` : '₹ 0',
       '[Signatory_Name]': signatory ? signatory.name : 'Authorised Signatory',
       '[Signatory_Designation]': signatory ? signatory.designation : 'Human Resources',
       '[Signatory_Company]': employee.company?.name || 'Company',
@@ -762,6 +832,214 @@ It is mandatory for the employee to serve a notice period of <strong>1 month</st
 <p>We confirm that you have completed the handover process and cleared all dues. Your full and final settlement is being processed and will be credited within the stipulated time as per company policy.</p>
 
 <p>We thank you for your services and wish you success in your future endeavors.</p>`,
+      },
+      // ── FORM 16 (Req 2.10: Annual Tax Deduction & Salary Certificate under Section 203) ──
+      {
+        name: 'Form 16 (TDS Certificate)',
+        type: 'form16',
+        category: 'Tax & Statutory',
+        description: 'Certificate under Section 203 of the Income-tax Act, 1961 for tax deducted at source on salary (Part A & Part B)',
+        variant_count: 5,
+        is_active: true,
+        content: `<div style="font-family: inherit; line-height: 1.5;">
+  <div style="text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
+    <h2 style="margin: 0 0 4px; font-size: 15px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px; color: #0f172a;">FORM NO. 16</h2>
+    <p style="margin: 0 0 2px; font-size: 10px; font-weight: 700; color: #334155;">[See rule 31(1)(a)]</p>
+    <p style="margin: 0; font-size: 10.5px; font-weight: 600; color: #475569;">
+      Certificate under section 203 of the Income-tax Act, 1961 for tax deducted at source on salary
+    </p>
+  </div>
+
+  <!-- PART A -->
+  <div style="margin-bottom: 18px;">
+    <div style="background: #0f172a; color: #fff; font-size: 10px; font-weight: 800; padding: 6px 10px; text-transform: uppercase; letter-spacing: 0.8px; border-radius: 4px 4px 0 0;">
+      PART A — Certificate of Tax Deduction at Source
+    </div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 10px;">
+      <tr>
+        <td style="width: 50%; padding: 6px 10px; border: 1px solid #cbd5e1; vertical-align: top;">
+          <strong>Name and Address of Employer (Deductor):</strong><br/>
+          <span style="font-weight: 700; color: #0f172a;">[Company_Name]</span><br/>
+          [Office_Address], [Office_City], [Office_State]
+        </td>
+        <td style="width: 50%; padding: 6px 10px; border: 1px solid #cbd5e1; vertical-align: top;">
+          <strong>Name and Designation of Employee:</strong><br/>
+          <span style="font-weight: 700; color: #0f172a;">[Employee_Name]</span><br/>
+          Designation: [Job_Title] | Code: [Employee_Code]
+        </td>
+      </tr>
+      <tr style="background: #f8fafc;">
+        <td style="padding: 5px 10px; border: 1px solid #cbd5e1;">
+          <strong>PAN of Deductor:</strong> [Company_PAN]<br/>
+          <strong>TAN of Deductor:</strong> [Company_TAN]
+        </td>
+        <td style="padding: 5px 10px; border: 1px solid #cbd5e1;">
+          <strong>PAN of Employee:</strong> [Employee_PAN]<br/>
+          <strong>Assessment Year:</strong> [Assessment_Year]
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 5px 10px; border: 1px solid #cbd5e1;">
+          <strong>Period with Employer:</strong> [Financial_Year_Start] to [Financial_Year_End]
+        </td>
+        <td style="padding: 5px 10px; border: 1px solid #cbd5e1;">
+          <strong>Financial Year:</strong> [Financial_Year]
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-size: 10px; font-weight: 700; margin: 8px 0 4px; color: #1e293b;">
+      Summary of Tax Deducted and Deposited into Central Government Account:
+    </p>
+    <table style="width: 100%; border-collapse: collapse; font-size: 9.5px; text-align: right; margin-bottom: 14px;">
+      <thead>
+        <tr style="background: #f1f5f9; font-weight: 700; text-align: center;">
+          <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left;">Quarter</th>
+          <th style="padding: 5px 6px; border: 1px solid #cbd5e1;">Receipt / Challan No.</th>
+          <th style="padding: 5px 6px; border: 1px solid #cbd5e1;">Amount Paid / Credited (₹)</th>
+          <th style="padding: 5px 6px; border: 1px solid #cbd5e1;">Tax Deducted (₹)</th>
+          <th style="padding: 5px 6px; border: 1px solid #cbd5e1;">Tax Deposited (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: left;">Quarter 1 (Apr - Jun)</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: center;">[Receipt_Q1]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[Salary_Q1]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q1]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q1]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: left;">Quarter 2 (Jul - Sep)</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: center;">[Receipt_Q2]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[Salary_Q2]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q2]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q2]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: left;">Quarter 3 (Oct - Dec)</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: center;">[Receipt_Q3]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[Salary_Q3]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q3]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q3]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: left;">Quarter 4 (Jan - Mar)</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1; text-align: center;">[Receipt_Q4]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[Salary_Q4]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q4]</td>
+          <td style="padding: 4px 6px; border: 1px solid #cbd5e1;">[TDS_Q4]</td>
+        </tr>
+        <tr style="background: #f8fafc; font-weight: 800;">
+          <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left;" colspan="2">Total</td>
+          <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">[Salary_Annual]</td>
+          <td style="padding: 5px 6px; border: 1px solid #cbd5e1; color: #b91c1c;">[Total_TDS_Deducted]</td>
+          <td style="padding: 5px 6px; border: 1px solid #cbd5e1; color: #15803d;">[Total_TDS_Deposited]</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- PART B -->
+  <div>
+    <div style="background: #0f172a; color: #fff; font-size: 10px; font-weight: 800; padding: 6px 10px; text-transform: uppercase; letter-spacing: 0.8px; border-radius: 4px 4px 0 0;">
+      PART B — Details of Salary Paid and Computation of Taxable Income
+    </div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 9.5px;">
+      <tbody>
+        <tr style="background: #f8fafc; font-weight: 700;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; width: 68%;">1. Gross Salary</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; width: 32%;">[Salary_Annual]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px 4px 20px; border: 1px solid #cbd5e1;">(a) Salary as per provisions contained in section 17(1)</td>
+          <td style="padding: 4px 8px; border: 1px solid #cbd5e1; text-align: right;">[Salary_Annual]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px 4px 20px; border: 1px solid #cbd5e1;">(b) Value of perquisites under section 17(2)</td>
+          <td style="padding: 4px 8px; border: 1px solid #cbd5e1; text-align: right;">₹ 0</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px 4px 20px; border: 1px solid #cbd5e1;">(c) Profits in lieu of salary under section 17(3)</td>
+          <td style="padding: 4px 8px; border: 1px solid #cbd5e1; text-align: right;">₹ 0</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">2. Less: Allowances exempt under section 10 (HRA)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;">-[HRA_Exemption_Annual]</td>
+        </tr>
+        <tr style="font-weight: 600;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">3. Balance (1 - 2)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right;">[Balance_Salary]</td>
+        </tr>
+        <tr style="background: #f8fafc; font-weight: 700;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">4. Deductions under section 16</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right;"></td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px 4px 20px; border: 1px solid #cbd5e1;">(a) Standard deduction under section 16(ia)</td>
+          <td style="padding: 4px 8px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;">-[Standard_Deduction]</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 8px 4px 20px; border: 1px solid #cbd5e1;">(b) Tax on employment under section 16(iii) (PT)</td>
+          <td style="padding: 4px 8px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;">-[Professional_Tax_Annual]</td>
+        </tr>
+        <tr style="font-weight: 700;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">5. Income chargeable under head 'Salaries' (3 - 4)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: 800;">[Net_Salary_Income]</td>
+        </tr>
+        <tr style="background: #f8fafc; font-weight: 700;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">6. Deductions under Chapter VI-A (Section 80C PF)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; color: #dc2626;">-[PF_Employee_Annual]</td>
+        </tr>
+        <tr style="font-weight: 800; background: #f1f5f9;">
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; color: #0f172a;">7. Total Taxable Income (5 - 6)</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: right; color: #0f172a;">[Total_Taxable_Income]</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">8. Tax on Total Income</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right;">[Tax_On_Income]</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">9. Less: Rebate under section 87A</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; color: #16a34a;">-[Tax_Rebate]</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1;">10. Health & Education Cess (4%)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right;">[Health_Education_Cess]</td>
+        </tr>
+        <tr style="font-weight: 800; background: #f8fafc;">
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; color: #0f172a;">11. Net Tax Payable</td>
+          <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: right; font-weight: 900;">[Total_Tax_Payable]</td>
+        </tr>
+        <tr style="font-weight: 700;">
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; color: #16a34a;">12. Less: Tax Deducted at Source u/s 192 (1)</td>
+          <td style="padding: 5px 8px; border: 1px solid #cbd5e1; text-align: right; color: #16a34a;">-[Total_TDS_Deposited]</td>
+        </tr>
+        <tr style="font-weight: 900; background: #ecfdf5;">
+          <td style="padding: 6px 8px; border: 2px solid #10b981; color: #065f46;">13. Tax Payable / (Refund Due)</td>
+          <td style="padding: 6px 8px; border: 2px solid #10b981; text-align: right; color: #065f46;">₹ 0</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 20px; padding-top: 10px; border-top: 1px solid #cbd5e1; font-size: 9.5px; color: #475569;">
+    <p style="margin: 0 0 6px;">
+      <strong>Verification:</strong> I, <strong>[Signatory_Name]</strong>, in the capacity of <strong>[Signatory_Designation]</strong>, do hereby certify that the information given above is true, complete and correct and is based on the books of account and other records of <strong>[Company_Name]</strong>.
+    </p>
+    <div style="margin-top: 16px; display: flex; justify-content: space-between; align-items: flex-end;">
+      <div>
+        <p style="margin: 0;"><strong>Place:</strong> [Office_City]</p>
+        <p style="margin: 2px 0 0;"><strong>Date:</strong> [Date]</p>
+      </div>
+      <div style="text-align: right;">
+        <p style="margin: 0; font-weight: 700; color: #0f172a;">[Signatory_Name]</p>
+        <p style="margin: 2px 0 0; color: #64748b;">[Signatory_Designation]</p>
+        <p style="margin: 2px 0 0; font-weight: 600;">For [Company_Name]</p>
+      </div>
+    </div>
+  </div>
+</div>`,
       },
     ];
   }

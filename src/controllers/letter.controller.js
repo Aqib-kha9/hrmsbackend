@@ -293,37 +293,107 @@ class LetterController {
         letterId = letter.id;
       }
 
-      // Send email
-      const emailSubject = subject || `${title} - ${employee.company?.name || 'Company'}`;
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1e293b;">${title}</h2>
-          <p>Dear ${employee.name},</p>
-          <p>Please find attached your ${title.toLowerCase()}.</p>
-          <p>If you have any questions, please contact the HR department.</p>
-          <br/>
-          <p style="color: #64748b;">Regards,<br/>HR Department<br/>${employee.company?.name || ''}</p>
-        </div>
-      `;
-
-      const emailResult = await emailService.sendMail({
+      // Send official email using email service
+      const companyName = employee.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+      const emailResult = await emailService.sendOfficialLetterEmail({
         to: employee.email,
-        subject: emailSubject,
-        html: emailHtml,
-        attachments: [{
-          filename: `${type}-${employee.emp_code || 'employee'}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        }],
+        employeeName: employee.name,
+        empCode: employee.emp_code || '',
+        letterTitle: title,
+        letterType: type,
+        companyName,
+        pdfBuffer,
+        customSubject: subject,
       });
 
-      return success(res, 'Letter sent successfully', {
+      return success(res, `Letter sent successfully to registered email (${employee.email})`, {
         letter_id: letterId,
+        recipient_email: employee.email,
         email_accepted: emailResult.accepted,
         email_rejected: emailResult.rejected,
       }, 200);
     } catch (err) {
       logger.error(`Send letter email error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async sendExistingLetterEmail(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { recipient_email, custom_note, subject } = req.body || {};
+
+      const { Letter } = require('../models');
+      const letter = await Letter.findByPk(id, {
+        include: [
+          {
+            model: Employee,
+            as: 'issuedTo',
+            include: [
+              { model: Office, as: 'office', attributes: ['name', 'address', 'city', 'state'] },
+              { model: Company, as: 'company', attributes: ['name', 'email', 'phone'] },
+            ],
+          },
+          {
+            model: AuthorisedSignatory,
+            as: 'signatory',
+          },
+        ],
+      });
+
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Letter record not found' });
+      }
+
+      const targetEmail = recipient_email || letter.issuedTo?.email || letter.candidate_email;
+      if (!targetEmail) {
+        return res.status(400).json({ success: false, message: 'Recipient has no registered email address' });
+      }
+
+      const targetName = letter.issuedTo?.name || letter.candidate_name || 'Employee';
+      const targetCode = letter.issuedTo?.emp_code || '';
+      const companyName = letter.issuedTo?.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+
+      // Generate PDF
+      const pdfBuffer = await letterPdfService.generateLetterPDF({
+        content: letter.content || '',
+        fullHtml: req.body?.fullHtml,
+        employee: letter.issuedTo || {
+          name: targetName,
+          emp_code: targetCode,
+          email: targetEmail,
+          company: { name: companyName },
+        },
+        title: letter.title,
+        type: letter.type,
+        signatory: letter.signatory,
+      });
+
+      // Send official email with attachment
+      const emailResult = await emailService.sendOfficialLetterEmail({
+        to: targetEmail,
+        employeeName: targetName,
+        empCode: targetCode,
+        letterTitle: letter.title,
+        letterType: letter.type,
+        companyName,
+        pdfBuffer,
+        customSubject: subject,
+        customNote: custom_note,
+      });
+
+      if (letter.status === 'draft') {
+        await letter.update({ status: 'issued', issued_date: letter.issued_date || new Date() });
+      }
+
+      return success(res, `Letter dispatched successfully to registered email (${targetEmail})`, {
+        letter_id: letter.id,
+        recipient_email: targetEmail,
+        email_accepted: emailResult.accepted,
+        email_rejected: emailResult.rejected,
+      }, 200);
+    } catch (err) {
+      logger.error(`Send existing letter email error: ${err.message}`);
       return next(err);
     }
   }

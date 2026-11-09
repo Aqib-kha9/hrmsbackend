@@ -13,7 +13,7 @@ const LetterTemplate = sequelize.define('LetterTemplate', {
     allowNull: false,
   },
   type: {
-    type: DataTypes.ENUM('offer', 'appointment', 'promotion', 'transfer', 'resignation', 'experience', 'relieving', 'warning'),
+    type: DataTypes.ENUM('offer', 'appointment', 'promotion', 'transfer', 'resignation', 'experience', 'relieving', 'warning', 'form16'),
     allowNull: false,
   },
   category: {
