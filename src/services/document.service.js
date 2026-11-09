@@ -14,17 +14,44 @@ class DocumentService {
   _normalizeDocType(input) {
     if (!input || typeof input !== 'string') return 'other';
     const raw = input.toLowerCase().trim();
-    const map = {
-      aadhar: 'id_proof', aadhaar: 'id_proof', pan: 'id_proof',
-      'pan card': 'id_proof', voter: 'id_proof', 'voter id': 'id_proof',
-      'driving licence': 'id_proof', 'driving license': 'id_proof',
-      passbook: 'address_proof', 'bank passbook': 'address_proof',
-      bank_proof: 'address_proof', 'bank proof': 'address_proof',
-      photo: 'other', photograph: 'other',
-      certificate: 'certificate', 'offer letter': 'offer_letter',
-      offer_letter: 'offer_letter', contract: 'contract',
-    };
-    return map[raw] || 'other';
+    if (
+      raw.includes('aadhar') ||
+      raw.includes('aadhaar') ||
+      raw.includes('pan') ||
+      raw.includes('voter') ||
+      raw.includes('license') ||
+      raw.includes('licence') ||
+      raw.includes('id_proof')
+    ) {
+      return 'id_proof';
+    }
+    if (
+      raw.includes('passbook') ||
+      raw.includes('bank') ||
+      raw.includes('cheque') ||
+      raw.includes('address')
+    ) {
+      return 'address_proof';
+    }
+    if (
+      raw.includes('certificate') ||
+      raw.includes('education') ||
+      raw.includes('degree') ||
+      raw.includes('qualification') ||
+      raw.includes('relieving') ||
+      raw.includes('experience')
+    ) {
+      return 'certificate';
+    }
+    if (
+      raw.includes('offer') ||
+      raw.includes('appointment') ||
+      raw.includes('contract') ||
+      raw.includes('signed')
+    ) {
+      return 'offer_letter';
+    }
+    return 'other';
   }
 
   async getDocuments(employeeId, { page = 1, limit = PAGINATION.DEFAULT_LIMIT, type, status } = {}) {
