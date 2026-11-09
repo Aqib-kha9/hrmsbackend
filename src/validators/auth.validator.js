@@ -45,6 +45,7 @@ const registerSchema = Joi.object({
 
   // ── Salary configuration ──
   fixed_gross: Joi.number().min(0).optional().allow(null, ''),
+  hra_applicable: Joi.boolean().default(true),
   pf_applicable: Joi.boolean().default(true),
   pf_ceiling: Joi.boolean().default(false),
   // PF & ESIC contribution modes + rates (Phase 8)
@@ -80,6 +81,8 @@ const registerSchema = Joi.object({
   special_allowance: Joi.number().min(0).optional().allow(null, ''),
   conveyance: Joi.number().min(0).optional().allow(null, ''),
   medical_allowance: Joi.number().min(0).optional().allow(null, ''),
+  performance_allowance: Joi.number().min(0).optional().allow(null, ''),
+  annual_ctc: Joi.number().min(0).optional().allow(null, ''),
 
   // ── Offer letter toggle ──
   send_offer_letter: Joi.boolean().default(false),
@@ -87,6 +90,7 @@ const registerSchema = Joi.object({
 
 const salaryStructureSchema = Joi.object({
   fixed_gross: Joi.number().min(0).required(),
+  hra_applicable: Joi.boolean().default(true),
   pf_applicable: Joi.boolean().default(true),
   pf_ceiling: Joi.boolean().default(false),
   // PF & ESIC contribution modes + rates (Phase 8)
@@ -102,6 +106,8 @@ const salaryStructureSchema = Joi.object({
   special_allowance: Joi.number().min(0).optional().allow(null, ''),
   conveyance: Joi.number().min(0).optional().allow(null, ''),
   medical_allowance: Joi.number().min(0).optional().allow(null, ''),
+  performance_allowance: Joi.number().min(0).optional().allow(null, ''),
+  annual_ctc: Joi.number().min(0).optional().allow(null, ''),
   effective_from: Joi.date().optional().allow(null, ''),
   remarks: Joi.string().max(500).optional().allow(null, ''),
 });

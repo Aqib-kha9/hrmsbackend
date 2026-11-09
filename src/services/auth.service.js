@@ -209,12 +209,40 @@ class AuthService {
     const hashedPassword = await bcrypt.hash(plainPassword, 12);
     const sendOfferLetter = employeeData.send_offer_letter === true; // default false
 
-    // Calculate salary breakup using 40% basic formula matching payroll_ledger
+    // Calculate salary breakup: Basic at 50% of CTC, Optional HRA, Allowances (Req 2.4)
     const gross = Number(employeeData.fixed_gross) || 0;
-    const basic = Math.round(gross * 0.40);
-    const hra = Math.round(basic * 0.40);
-    const otherAllowance = gross - basic - hra;
+    const basic = Math.round(gross * 0.50);
+    const hraApplicable = employeeData.hra_applicable !== false;
+    const hra = hraApplicable ? Math.round(basic * 0.40) : 0;
+    const specialAllowance = Number(employeeData.special_allowance) || 0;
+    const conveyance = Number(employeeData.conveyance) || 0;
+    const medicalAllowance = Number(employeeData.medical_allowance) || 0;
+    const performanceAllowance = Number(employeeData.performance_allowance) || 0;
+    const otherAllowance = Math.max(0, gross - (basic + hra + specialAllowance + conveyance + medicalAllowance + performanceAllowance));
     const effectiveWorkDays = employeeData.effective_work_days || 26;
+
+    // Monthly & Annual CTC
+    let pfEmployer = 0;
+    if (employeeData.pf_applicable !== false) {
+      const pfBase = employeeData.pf_ceiling ? Math.min(basic, 15000) : basic;
+      const pfMode = employeeData.pf_contribution_mode || 'shared';
+      const pfEmployerRate = Number(employeeData.pf_employer_rate ?? 0.12);
+      if (pfMode === 'shared' || pfMode === 'employer_only') {
+        pfEmployer = Math.round(pfBase * pfEmployerRate);
+      }
+    }
+
+    let esiEmployer = 0;
+    if (employeeData.esic_applicable) {
+      const esiMode = employeeData.esic_contribution_mode || 'shared';
+      const esicEmployerRate = Number(employeeData.esic_employer_rate ?? 0.0325);
+      if (esiMode === 'shared' || esiMode === 'employer_only') {
+        esiEmployer = Math.ceil(gross * esicEmployerRate);
+      }
+    }
+
+    const monthlyCTC = gross + pfEmployer + esiEmployer;
+    const annualCTC = Number(employeeData.annual_ctc) || (monthlyCTC * 12);
 
     // Execute onboarding in a transaction
     let result;
@@ -241,9 +269,12 @@ class AuthService {
           company_id: employeeData.company_id || null,
           status: 'active',
           is_first_login: true,
-          // Salary denormalized
+          // Salary denormalized (Req 2.4)
           fixed_gross: gross,
           basic_salary: basic,
+          performance_allowance: performanceAllowance,
+          annual_ctc: annualCTC,
+          hra_applicable: hraApplicable,
           pf_applicable: employeeData.pf_applicable !== false,
           pf_ceiling: employeeData.pf_ceiling || false,
           pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
@@ -282,10 +313,13 @@ class AuthService {
           fixed_gross: gross,
           basic_salary: basic,
           hra: hra,
-          special_allowance: employeeData.special_allowance || 0,
+          special_allowance: specialAllowance,
           other_allowance: otherAllowance,
-          conveyance: employeeData.conveyance || 0,
-          medical_allowance: employeeData.medical_allowance || 0,
+          conveyance: conveyance,
+          medical_allowance: medicalAllowance,
+          performance_allowance: performanceAllowance,
+          annual_ctc: annualCTC,
+          hra_applicable: hraApplicable,
           pf_applicable: employeeData.pf_applicable !== false,
           pf_ceiling: employeeData.pf_ceiling || false,
           pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',

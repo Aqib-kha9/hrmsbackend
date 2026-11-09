@@ -70,14 +70,24 @@ class PayrollLedgerService {
 
     const fixedGross = Number(row.fixed_gross) || 0;
 
-    const fixedBasic = Math.round(fixedGross * 0.40);
-    const fixedHra = Math.round(fixedBasic * 0.40);
-    const fixedOther = fixedGross - fixedBasic - fixedHra;
+    // 50% Basic Salary formula & component breakup (Req 2.4)
+    const fixedBasic = Math.round(fixedGross * 0.50);
+    const hraApplicable = row.hra_applicable !== false;
+    const fixedHra = hraApplicable ? Math.round(fixedBasic * 0.40) : 0;
+    const fixedConv = Number(row.conveyance) || 0;
+    const fixedMed = Number(row.medical_allowance) || 0;
+    const fixedSpec = Number(row.special_allowance) || 0;
+    const fixedPerf = Number(row.performance_allowance) || 0;
+    const fixedOther = Math.max(0, fixedGross - (fixedBasic + fixedHra + fixedConv + fixedMed + fixedSpec + fixedPerf));
 
     const basic = Math.round((fixedBasic / D) * payableDays);
     const hra = Math.round((fixedHra / D) * payableDays);
+    const conveyance = Math.round((fixedConv / D) * payableDays);
+    const medicalAllowance = Math.round((fixedMed / D) * payableDays);
+    const specialAllowance = Math.round((fixedSpec / D) * payableDays);
+    const performanceAllowance = Math.round((fixedPerf / D) * payableDays);
     const other = Math.round((fixedOther / D) * payableDays);
-    const proratedGross = basic + hra + other;
+    const proratedGross = basic + hra + conveyance + medicalAllowance + specialAllowance + performanceAllowance + other;
 
     const totalEarnings = proratedGross
       + (Number(row.previous_arrears) || 0)
@@ -154,10 +164,12 @@ class PayrollLedgerService {
     const net = totalEarnings - grossDeductions;
 
     const totalMonthlyCTC = totalEarnings + pfEmployer + esiEmployer;
+    const annualCTC = totalMonthlyCTC * 12;
 
     return {
-      fixedGross, fixedBasic, fixedHra, fixedOther,
-      basic, hra, other, proratedGross, totalEarnings,
+      fixedGross, fixedBasic, fixedHra, fixedConv, fixedMed, fixedSpec, fixedPerf, fixedOther,
+      basic, hra, conveyance, medicalAllowance, specialAllowance, performanceAllowance, other,
+      proratedGross, totalEarnings,
       payableDays,
       effectiveAbsentDays,
       leaveAdjustmentDays: leaveAdjust,
@@ -165,7 +177,7 @@ class PayrollLedgerService {
       manualPayableDays: (row.manual_payable_days !== null && row.manual_payable_days !== undefined && !isNaN(Number(row.manual_payable_days))) ? Number(row.manual_payable_days) : null,
       lop: fixedGross - proratedGross,
       pf, esi, pt, grossDeductions, net,
-      pfEmployer, esiEmployer, totalMonthlyCTC,
+      pfEmployer, esiEmployer, totalMonthlyCTC, annualCTC,
     };
   }
 
@@ -260,11 +272,16 @@ class PayrollLedgerService {
         ...emp.toJSON(),
         ...entry.toJSON(),
         loan_deduction: loanDeduction,
-        fixed_gross: emp.fixed_gross,
-        pf_applicable: emp.pf_applicable,
-        pf_ceiling: emp.pf_ceiling,
-        esic_applicable: emp.esic_applicable,
+        fixed_gross: activeStructure?.fixed_gross || emp.fixed_gross,
+        pf_applicable: activeStructure ? activeStructure.pf_applicable : emp.pf_applicable,
+        pf_ceiling: activeStructure ? activeStructure.pf_ceiling : emp.pf_ceiling,
+        esic_applicable: activeStructure ? activeStructure.esic_applicable : emp.esic_applicable,
         pt_applicable: ptApplicable,
+        hra_applicable: activeStructure ? activeStructure.hra_applicable : (emp.hra_applicable !== false),
+        conveyance: activeStructure?.conveyance || 0,
+        medical_allowance: activeStructure?.medical_allowance || 0,
+        special_allowance: activeStructure?.special_allowance || 0,
+        performance_allowance: activeStructure?.performance_allowance || emp.performance_allowance || 0,
         absent_days: absentDays,
         cycle_leaves: cycleLeaveMap.get(emp.id) || [],
       };
@@ -883,6 +900,7 @@ class PayrollLedgerService {
       esic_employee_rate: structure?.esic_employee_rate ?? 0.0075,
       esic_employer_rate: structure?.esic_employer_rate ?? 0.0325,
       pt_applicable: structure?.pt_applicable !== false,
+      hra_applicable: structure ? structure.hra_applicable : (emp.hra_applicable !== false),
       absent_days: entry.absent_days,
       leave_adjustment_days: entry.leave_adjustment_days,
       leave_carry_forward_days: entry.leave_carry_forward_days,
@@ -894,6 +912,8 @@ class PayrollLedgerService {
       other_deduction: entry.other_deduction,
       conveyance: structure?.conveyance || 0,
       medical_allowance: structure?.medical_allowance || 0,
+      special_allowance: structure?.special_allowance || 0,
+      performance_allowance: structure?.performance_allowance || emp.performance_allowance || 0,
     };
 
     const calc = this._calculateRow(row, dynamicDays, slabs);
@@ -918,18 +938,23 @@ class PayrollLedgerService {
       present_days: entry.present_days !== undefined && entry.present_days !== null && Number(entry.present_days) > 0 ? Number(entry.present_days) : calc.payableDays,
       payable_days: calc.payableDays,
       lwp_days: entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0 ? Number(entry.lwp_days) : Math.max(0, dynamicDays - calc.payableDays),
-      // Standard / Fixed Structure (Req 3.3)
+      // Standard / Fixed Structure (Req 3.3 & Req 2.4)
       fixed_gross: calc.fixedGross,
       fixed_basic: calc.fixedBasic,
       fixed_hra: calc.fixedHra,
       fixed_other: calc.fixedOther,
-      // Earnings & Deductions (Req 3.3)
+      fixed_conveyance: calc.fixedConv,
+      fixed_medical: calc.fixedMed,
+      fixed_special: calc.fixedSpec,
+      fixed_performance: calc.fixedPerf,
+      // Earnings & Deductions (Req 3.3 & Req 2.4)
       basic_salary: calc.basic,
       hra: calc.hra,
       other_allowance: calc.other,
-      special_allowance: structure?.special_allowance || 0,
-      conveyance: structure?.conveyance || 0,
-      medical_allowance: structure?.medical_allowance || 0,
+      special_allowance: calc.specialAllowance || structure?.special_allowance || 0,
+      conveyance: calc.conveyance || structure?.conveyance || 0,
+      medical_allowance: calc.medicalAllowance || structure?.medical_allowance || 0,
+      performance_allowance: calc.performanceAllowance || structure?.performance_allowance || 0,
       bonus: Number(entry.bonus) || 0,
       incentive: Number(entry.incentive) || 0,
       previous_arrears: Number(entry.previous_arrears) || 0,
@@ -945,6 +970,7 @@ class PayrollLedgerService {
       pf_employer: calc.pfEmployer,
       esi_employer: calc.esiEmployer,
       ctc: calc.totalMonthlyCTC,
+      annual_ctc: calc.annualCTC || (calc.totalMonthlyCTC * 12),
     };
 
     return await payslipPdfService.generatePayslipPDF(payslipData);

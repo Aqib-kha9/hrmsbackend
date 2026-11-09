@@ -353,9 +353,38 @@ class EmployeeService {
     if (!employee) throw new AppError('Employee not found', 404);
 
     const gross = Number(salaryData.fixed_gross) || 0;
-    const basic = Math.round(gross * 0.40);
-    const hra = Math.round(basic * 0.40);
-    const otherAllowance = gross - basic - hra;
+    // Basic Salary at 50% of CTC/Gross (Req 2.4)
+    const basic = Math.round(gross * 0.50);
+    const hraApplicable = salaryData.hra_applicable !== false;
+    const hra = hraApplicable ? Math.round(basic * 0.40) : 0;
+    const specialAllowance = Number(salaryData.special_allowance) || 0;
+    const conveyance = Number(salaryData.conveyance) || 0;
+    const medicalAllowance = Number(salaryData.medical_allowance) || 0;
+    const performanceAllowance = Number(salaryData.performance_allowance) || 0;
+    const otherAllowance = Math.max(0, gross - (basic + hra + specialAllowance + conveyance + medicalAllowance + performanceAllowance));
+
+    // Calculate Employer PF & ESIC for CTC computation
+    let pfEmployer = 0;
+    if (salaryData.pf_applicable !== false) {
+      const pfBase = salaryData.pf_ceiling ? Math.min(basic, 15000) : basic;
+      const pfMode = salaryData.pf_contribution_mode || 'shared';
+      const pfEmployerRate = Number(salaryData.pf_employer_rate ?? 0.12);
+      if (pfMode === 'shared' || pfMode === 'employer_only') {
+        pfEmployer = Math.round(pfBase * pfEmployerRate);
+      }
+    }
+
+    let esiEmployer = 0;
+    if (salaryData.esic_applicable) {
+      const esiMode = salaryData.esic_contribution_mode || 'shared';
+      const esicEmployerRate = Number(salaryData.esic_employer_rate ?? 0.0325);
+      if (esiMode === 'shared' || esiMode === 'employer_only') {
+        esiEmployer = Math.ceil(gross * esicEmployerRate);
+      }
+    }
+
+    const monthlyCTC = gross + pfEmployer + esiEmployer;
+    const annualCTC = Number(salaryData.annual_ctc) || (monthlyCTC * 12);
 
     const effectiveFrom = salaryData.effective_from || new Date();
 
@@ -378,13 +407,22 @@ class EmployeeService {
         fixed_gross: gross,
         basic_salary: basic,
         hra,
-        special_allowance: salaryData.special_allowance || 0,
+        special_allowance: specialAllowance,
         other_allowance: otherAllowance,
-        conveyance: salaryData.conveyance || 0,
-        medical_allowance: salaryData.medical_allowance || 0,
+        conveyance: conveyance,
+        medical_allowance: medicalAllowance,
+        performance_allowance: performanceAllowance,
+        annual_ctc: annualCTC,
+        hra_applicable: hraApplicable,
         pf_applicable: salaryData.pf_applicable !== false,
         pf_ceiling: salaryData.pf_ceiling || false,
+        pf_contribution_mode: salaryData.pf_contribution_mode || 'shared',
+        pf_employee_rate: salaryData.pf_employee_rate ?? 0.12,
+        pf_employer_rate: salaryData.pf_employer_rate ?? 0.12,
         esic_applicable: salaryData.esic_applicable || false,
+        esic_contribution_mode: salaryData.esic_contribution_mode || 'shared',
+        esic_employee_rate: salaryData.esic_employee_rate ?? 0.0075,
+        esic_employer_rate: salaryData.esic_employer_rate ?? 0.0325,
         pt_applicable: salaryData.pt_applicable !== false,
         effective_work_days: salaryData.effective_work_days || 26,
         effective_from: effectiveFrom,
@@ -413,6 +451,9 @@ class EmployeeService {
       await employee.update({
         fixed_gross: gross,
         basic_salary: basic,
+        performance_allowance: performanceAllowance,
+        annual_ctc: annualCTC,
+        hra_applicable: hraApplicable,
         pf_applicable: salaryData.pf_applicable !== false,
         pf_ceiling: salaryData.pf_ceiling || false,
         esic_applicable: salaryData.esic_applicable || false,
@@ -618,7 +659,8 @@ class EmployeeService {
     }
 
     const newGross = Number(rehireData.fixed_gross) || Number(employee.fixed_gross) || 0;
-    const newBasic = Math.round(newGross * 0.40);
+    // 50% Basic Salary (Req 2.4)
+    const newBasic = Math.round(newGross * 0.50);
     const newDoj = rehireData.date_of_joining || new Date().toISOString().split('T')[0];
 
     const t = await sequelize.transaction();
@@ -635,12 +677,14 @@ class EmployeeService {
       }, { transaction: t });
 
       if (newGross > 0) {
+        const hra = Math.round(newBasic * 0.40);
         await SalaryStructure.create({
           employee_id: employee.id,
           fixed_gross: newGross,
           basic_salary: newBasic,
-          hra: Math.round(newBasic * 0.40),
-          other_allowance: newGross - newBasic - Math.round(newBasic * 0.40),
+          hra,
+          other_allowance: Math.max(0, newGross - newBasic - hra),
+          annual_ctc: newGross * 12,
           effective_from: newDoj,
           created_by: approvedBy,
           updated_by: approvedBy,

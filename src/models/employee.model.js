@@ -137,6 +137,23 @@ const Employee = sequelize.define('Employee', {
     defaultValue: 0,
     comment: 'Legacy field — prefer fixed_gross for payroll ledger calculations',
   },
+  performance_allowance: {
+    type: DataTypes.DECIMAL(12, 2),
+    allowNull: true,
+    defaultValue: 0,
+    comment: 'Performance allowance component (Req 2.4)',
+  },
+  annual_ctc: {
+    type: DataTypes.DECIMAL(12, 2),
+    allowNull: true,
+    defaultValue: 0,
+    comment: 'Annual Cost to Company (Req 2.4)',
+  },
+  hra_applicable: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    comment: 'Whether HRA is enabled for this employee (Req 2.4)',
+  },
   pf_applicable: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,

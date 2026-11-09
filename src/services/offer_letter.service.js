@@ -22,17 +22,26 @@ class OfferLetterService {
   COMPANY_ADDRESS = 'Corporate Office, [Your Company Address]';
 
   /**
-   * Calculate salary components from gross using the 40% basic formula.
+   * Calculate salary components from gross using the 50% basic formula & component breakup (Req 2.4).
    * Mirrors payroll_ledger.service.js _calculateRow() logic.
    *
    * @param {number} fixedGross
-   * @returns {{ basic: number, hra: number, otherAllowance: number }}
+   * @param {boolean} hraApplicable
+   * @param {number} conveyance
+   * @param {number} medicalAllowance
+   * @param {number} specialAllowance
+   * @param {number} performanceAllowance
+   * @returns {{ basic: number, hra: number, conveyance: number, medicalAllowance: number, specialAllowance: number, performanceAllowance: number, otherAllowance: number }}
    */
-  _calculateBreakup(fixedGross) {
-    const basic = Math.round(fixedGross * 0.40);
-    const hra = Math.round(basic * 0.40);
-    const otherAllowance = fixedGross - basic - hra;
-    return { basic, hra, otherAllowance };
+  _calculateBreakup(fixedGross, hraApplicable = true, conveyance = 0, medicalAllowance = 0, specialAllowance = 0, performanceAllowance = 0) {
+    const basic = Math.round(fixedGross * 0.50);
+    const hra = hraApplicable !== false ? Math.round(basic * 0.40) : 0;
+    const conv = Number(conveyance) || 0;
+    const med = Number(medicalAllowance) || 0;
+    const spec = Number(specialAllowance) || 0;
+    const perf = Number(performanceAllowance) || 0;
+    const otherAllowance = Math.max(0, fixedGross - (basic + hra + conv + med + spec + perf));
+    return { basic, hra, conveyance: conv, medicalAllowance: med, specialAllowance: spec, performanceAllowance: perf, otherAllowance };
   }
 
   /**
@@ -88,10 +97,20 @@ class OfferLetterService {
    */
   async generateOfferLetterPDF(employee, salaryStructure) {
     const gross = Number(salaryStructure.fixed_gross) || Number(employee.fixed_gross) || 0;
-    const { basic, hra, otherAllowance } = this._calculateBreakup(gross);
+    const hraApplicable = salaryStructure.hra_applicable !== false && employee.hra_applicable !== false;
     const specialAllowance = Number(salaryStructure.special_allowance) || 0;
     const conveyance = Number(salaryStructure.conveyance) || 0;
     const medicalAllowance = Number(salaryStructure.medical_allowance) || 0;
+    const performanceAllowance = Number(salaryStructure.performance_allowance) || Number(employee.performance_allowance) || 0;
+
+    const { basic, hra, otherAllowance } = this._calculateBreakup(
+      gross,
+      hraApplicable,
+      conveyance,
+      medicalAllowance,
+      specialAllowance,
+      performanceAllowance
+    );
     const effectiveWorkDays = salaryStructure.effective_work_days || 26;
 
     const { ctc, pfEmployer, esiEmployer } = this._calculateCTC(
@@ -230,12 +249,13 @@ class OfferLetterService {
 
       let y = tableStartY;
       drawTableHeader(y); y += rowH;
-      y = drawTableRow(y, 'Basic Salary', basic, false);
-      y = drawTableRow(y, 'House Rent Allowance (HRA)', hra, false);
-      if (specialAllowance > 0) y = drawTableRow(y, 'Special Allowance', specialAllowance, false);
-      y = drawTableRow(y, 'Other Allowance', otherAllowance, false);
+      y = drawTableRow(y, 'Basic Salary (50% of CTC)', basic, false);
+      if (hraApplicable || hra > 0) y = drawTableRow(y, 'House Rent Allowance (HRA)', hra, false);
       if (conveyance > 0) y = drawTableRow(y, 'Conveyance Allowance', conveyance, false);
       if (medicalAllowance > 0) y = drawTableRow(y, 'Medical Allowance', medicalAllowance, false);
+      if (specialAllowance > 0) y = drawTableRow(y, 'Special Allowance', specialAllowance, false);
+      if (performanceAllowance > 0) y = drawTableRow(y, 'Performance Allowance', performanceAllowance, false);
+      y = drawTableRow(y, 'Other Allowance', otherAllowance, false);
       y = drawTableRow(y, 'Gross Salary', gross, true);
 
       // Reset cursor after explicit-coordinate table drawing
@@ -249,14 +269,16 @@ class OfferLetterService {
       doc.text(`Gross Salary in Words: ${grossWords}`, { indent: 10 });
       doc.moveDown(0.8);
 
-      // ── 4. Statutory Contributions ──
-      doc.fontSize(12).font('Helvetica-Bold').text('4. Statutory Contributions & CTC:');
-      doc.fontSize(12).font('Helvetica');
+      // ── 4. Statutory Contributions & CTC ──
+      const annualCTC = ctc * 12;
+      doc.fontSize(12).font('Helvetica-Bold').text('4. Statutory Contributions & CTC Summary (Req 2.4):');
+      doc.fontSize(11).font('Helvetica');
       doc.text(`   • PF: ${employee.pf_applicable !== false ? 'Applicable (12% of Basic)' : 'Not Applicable'}${employee.pf_ceiling ? ' (ceiling ₹15,000)' : ''}`);
       doc.text(`   • ESIC: ${employee.esic_applicable ? 'Applicable' : 'Not Applicable'}  • Professional Tax: As per state slab`);
       doc.moveDown(0.3);
-      doc.font('Helvetica-Bold').fontSize(12);
+      doc.font('Helvetica-Bold').fontSize(11);
       doc.text(`   Monthly CTC: ₹ ${ctc.toLocaleString('en-IN')} (${salaryToWords(ctc)})`);
+      doc.text(`   Annual CTC:  ₹ ${annualCTC.toLocaleString('en-IN')} (${salaryToWords(annualCTC)})`);
 
       doc.moveDown(0.8);
 

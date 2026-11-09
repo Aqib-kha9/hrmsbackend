@@ -5,10 +5,10 @@ const logger = require('../utils/logger');
 const { PAGINATION, PT_SLABS, PAYSLIP_STATUS } = require('../utils/constants');
 const { getWeekendDays, getHolidaysInMonth, countWorkingDaysInMonth, countElapsedWorkingDays, getPTSlabs } = require('../utils/payrollHelper');
 
-// ── Salary calculation helpers (40 % formula, mirroring payroll_ledger & offer_letter) ──
+// ── Salary calculation helpers (50% basic formula & component breakup, Req 2.4) ──
 
 /**
- * Break down fixed gross into basic / hra / other components.
+ * Break down fixed gross into basic (50%), optional HRA, allowances, and other components.
  *
  * @param {number} fixedGross   - Employee's fixed gross salary
  * @param {number} workingDays  - Total working / calendar days used as denominator
@@ -17,24 +17,44 @@ const { getWeekendDays, getHolidaysInMonth, countWorkingDaysInMonth, countElapse
  *                                    when supplied the numerator is capped to
  *                                    min(elapsedDays, workingDays) so the salary
  *                                    is pro-rated up to today for mid-month cycles.
+ * @param {object} opts         - Optional allowance & applicability overrides (Req 2.4)
  */
-function calcBreakdown(fixedGross, workingDays = 26, absentDays = 0, elapsedDays = null) {
+function calcBreakdown(fixedGross, workingDays = 26, absentDays = 0, elapsedDays = null, {
+  hraApplicable = true,
+  conveyance = 0,
+  medicalAllowance = 0,
+  specialAllowance = 0,
+  performanceAllowance = 0,
+} = {}) {
   const D = workingDays || 26;
 
   // For ongoing months: cap payable days to however many days have elapsed
   const effectiveDays = elapsedDays != null ? Math.min(elapsedDays, D) : D;
   const payableDays = Math.max(0, effectiveDays - (absentDays || 0));
 
-  const fixedBasic = Math.round(fixedGross * 0.40);
-  const fixedHra = Math.round(fixedBasic * 0.40);
-  const fixedOther = fixedGross - fixedBasic - fixedHra;
+  // 50% Basic Salary (Req 2.4)
+  const fixedBasic = Math.round(fixedGross * 0.50);
+  const fixedHra = hraApplicable !== false ? Math.round(fixedBasic * 0.40) : 0;
+  const fixedConv = Number(conveyance) || 0;
+  const fixedMed = Number(medicalAllowance) || 0;
+  const fixedSpec = Number(specialAllowance) || 0;
+  const fixedPerf = Number(performanceAllowance) || 0;
+  const fixedOther = Math.max(0, fixedGross - (fixedBasic + fixedHra + fixedConv + fixedMed + fixedSpec + fixedPerf));
 
   // Prorate on the full denominator (D) so the rate per-day stays correct
   const basic = Math.round((fixedBasic / D) * payableDays);
   const hra = Math.round((fixedHra / D) * payableDays);
+  const conv = Math.round((fixedConv / D) * payableDays);
+  const med = Math.round((fixedMed / D) * payableDays);
+  const spec = Math.round((fixedSpec / D) * payableDays);
+  const perf = Math.round((fixedPerf / D) * payableDays);
   const other = Math.round((fixedOther / D) * payableDays);
 
-  return { fixedBasic, fixedHra, fixedOther, basic, hra, other, payableDays, effectiveDays };
+  return {
+    fixedBasic, fixedHra, fixedConv, fixedMed, fixedSpec, fixedPerf, fixedOther,
+    basic, hra, conveyance: conv, medicalAllowance: med, special: spec, performance: perf, other,
+    payableDays, effectiveDays
+  };
 }
 
 function calcStatutory(proratedGross, basic, basicForPf, pfApplicable, esicApplicable, {
@@ -301,15 +321,22 @@ class PayrollService {
         }
       }
 
-      // ── 40% formula breakdown (with current-month pro-rating) ──
-      const breakdown = calcBreakdown(fixedGross, workingDays, absentDays, empElapsedWorkingDays);
-      const proratedGross = breakdown.basic + breakdown.hra + breakdown.other;
+      // ── 50% formula breakdown & allowance components (Req 2.4) ──
+      const breakdown = calcBreakdown(fixedGross, workingDays, absentDays, empElapsedWorkingDays, {
+        hraApplicable: str ? str.hra_applicable : (emp.hra_applicable !== false),
+        conveyance: str?.conveyance || 0,
+        medicalAllowance: str?.medical_allowance || 0,
+        specialAllowance: str?.special_allowance || 0,
+        performanceAllowance: str?.performance_allowance || emp.performance_allowance || 0,
+      });
+      const proratedGross = breakdown.basic + breakdown.hra + breakdown.conveyance + breakdown.medicalAllowance + breakdown.special + breakdown.performance + breakdown.other;
 
-      // Conveyance & Medical — flat (from structure or defaults)
-      const conveyance = Number(str?.conveyance) || 0;
-      const medicalAllowance = Number(str?.medical_allowance) || 0;
+      const conveyance = breakdown.conveyance;
+      const medicalAllowance = breakdown.medicalAllowance;
+      const specialAllowance = breakdown.special;
+      const performanceAllowance = breakdown.performance;
 
-      const totalEarnings = proratedGross + conveyance + medicalAllowance;
+      const totalEarnings = proratedGross;
 
       // ── PF base (apply ceiling if enabled) ──
       const pfBase = pfCeiling ? Math.min(breakdown.basic, 15000) : breakdown.basic;
@@ -351,6 +378,7 @@ class PayrollService {
 
       // ── CTC ──
       const ctc = totalEarnings + pfEmployer + esiEmployer;
+      const annualCtc = ctc * 12;
 
       // ── Create payslip ──
       const payslip = await Payslip.create({
@@ -368,7 +396,8 @@ class PayrollService {
         esi_employer: esiEmployer,
         professional_tax: professionalTax,
         hra: breakdown.hra,
-        special_allowance: 0,       // captured in 'other' bucket per 40% formula
+        special_allowance: specialAllowance,
+        performance_allowance: performanceAllowance,
         other_allowance: breakdown.other,
         conveyance,
         medical_allowance: medicalAllowance,
@@ -377,16 +406,23 @@ class PayrollService {
         paid_days: breakdown.payableDays,
         lop_days: absentDays,
         ctc,
+        annual_ctc: annualCtc,
         status: PAYSLIP_STATUS.PROCESSED,
       });
 
       // ── Create salary components ──
       const components = [
-        { payslip_id: payslip.id, name: 'Basic Salary', type: 'earning', amount: breakdown.basic, category: 'basic' },
+        { payslip_id: payslip.id, name: 'Basic Salary (50%)', type: 'earning', amount: breakdown.basic, category: 'basic' },
         { payslip_id: payslip.id, name: 'HRA', type: 'earning', amount: breakdown.hra, category: 'allowance' },
         { payslip_id: payslip.id, name: 'Other Allowance', type: 'earning', amount: breakdown.other, category: 'allowance' },
       ];
 
+      if (specialAllowance > 0) {
+        components.push({ payslip_id: payslip.id, name: 'Special Allowance', type: 'earning', amount: specialAllowance, category: 'allowance' });
+      }
+      if (performanceAllowance > 0) {
+        components.push({ payslip_id: payslip.id, name: 'Performance Allowance', type: 'earning', amount: performanceAllowance, category: 'allowance' });
+      }
       if (conveyance > 0) {
         components.push({ payslip_id: payslip.id, name: 'Conveyance Allowance', type: 'earning', amount: conveyance, category: 'allowance' });
       }

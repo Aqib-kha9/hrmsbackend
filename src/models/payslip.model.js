@@ -87,6 +87,11 @@ const Payslip = sequelize.define('Payslip', {
     type: DataTypes.DECIMAL(12, 2),
     defaultValue: 0,
   },
+  performance_allowance: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0,
+    comment: 'Performance allowance (Req 2.4)',
+  },
   // Attendance-based fields
   working_days: {
     type: DataTypes.INTEGER,
@@ -108,6 +113,11 @@ const Payslip = sequelize.define('Payslip', {
     type: DataTypes.DECIMAL(12, 2),
     defaultValue: 0,
     comment: 'Monthly CTC = gross + employer contributions',
+  },
+  annual_ctc: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0,
+    comment: 'Annual CTC = Monthly CTC * 12 (Req 2.4)',
   },
   status: {
     type: DataTypes.ENUM('draft', 'processed', 'paid'),

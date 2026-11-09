@@ -160,17 +160,32 @@ class PayslipPdfService {
 
         // Items
         const fixedGross = Number(payslipData.fixed_gross) || 0;
-        const fixedBasic = payslipData.fixed_basic || (hasStandard ? Math.round(fixedGross * 0.40) : null);
-        const fixedHra = payslipData.fixed_hra || (hasStandard ? Math.round(fixedBasic * 0.40) : null);
-        const fixedOther = payslipData.fixed_other || (hasStandard ? (fixedGross - fixedBasic - fixedHra) : null);
+        // 50% Basic Salary (Req 2.4)
+        const fixedBasic = payslipData.fixed_basic || (hasStandard ? Math.round(fixedGross * 0.50) : null);
+        const fixedHra = payslipData.fixed_hra !== undefined ? payslipData.fixed_hra : (hasStandard ? Math.round(fixedBasic * 0.40) : null);
+        const fixedOther = payslipData.fixed_other;
 
         const earnings = [
-          { name: 'Basic Salary', standard: fixedBasic, amount: payslipData.basic_salary || 0 },
-          { name: 'House Rent Allowance (HRA)', standard: fixedHra, amount: payslipData.hra || 0 },
-          { name: 'Special / Other Allowance', standard: fixedOther, amount: payslipData.other_allowance || payslipData.special_allowance || 0 },
+          { name: 'Basic Salary (50%)', standard: fixedBasic, amount: payslipData.basic_salary || 0 },
         ];
-        if (payslipData.conveyance > 0) earnings.push({ name: 'Conveyance Allowance', standard: null, amount: payslipData.conveyance });
-        if (payslipData.medical_allowance > 0) earnings.push({ name: 'Medical Allowance', standard: null, amount: payslipData.medical_allowance });
+        if (payslipData.hra > 0 || fixedHra > 0) {
+          earnings.push({ name: 'House Rent Allowance (HRA)', standard: fixedHra, amount: payslipData.hra || 0 });
+        }
+        if (payslipData.conveyance > 0 || payslipData.fixed_conveyance > 0) {
+          earnings.push({ name: 'Conveyance Allowance', standard: payslipData.fixed_conveyance || null, amount: payslipData.conveyance || 0 });
+        }
+        if (payslipData.medical_allowance > 0 || payslipData.fixed_medical > 0) {
+          earnings.push({ name: 'Medical Allowance', standard: payslipData.fixed_medical || null, amount: payslipData.medical_allowance || 0 });
+        }
+        if (payslipData.special_allowance > 0 || payslipData.fixed_special > 0) {
+          earnings.push({ name: 'Special Allowance', standard: payslipData.fixed_special || null, amount: payslipData.special_allowance || 0 });
+        }
+        if (payslipData.performance_allowance > 0 || payslipData.fixed_performance > 0) {
+          earnings.push({ name: 'Performance Allowance', standard: payslipData.fixed_performance || null, amount: payslipData.performance_allowance || 0 });
+        }
+        if (payslipData.other_allowance > 0 || fixedOther > 0 || earnings.length === 1) {
+          earnings.push({ name: 'Other Allowance', standard: fixedOther, amount: payslipData.other_allowance || 0 });
+        }
         if (payslipData.bonus > 0) earnings.push({ name: 'Performance Bonus', standard: null, amount: payslipData.bonus });
         if (payslipData.incentive > 0) earnings.push({ name: 'Incentive', standard: null, amount: payslipData.incentive });
         if (payslipData.previous_arrears > 0) earnings.push({ name: 'Arrears', standard: null, amount: payslipData.previous_arrears });
@@ -259,16 +274,20 @@ class PayslipPdfService {
 
         rowY += 54;
 
-        // ── Employer Contributions & Monthly CTC ──
+        // ── Employer Contributions & Monthly / Annual CTC (Req 2.4) ──
         if (payslipData.pf_employer > 0 || payslipData.esi_employer > 0 || payslipData.ctc > 0) {
+          const monthlyCTCVal = payslipData.ctc || (totalEarnings + (payslipData.pf_employer || 0) + (payslipData.esi_employer || 0));
+          const annualCTCVal = payslipData.annual_ctc || (monthlyCTCVal * 12);
+
           doc.rect(36, rowY, 523, 24).fill(lightBg);
           doc.rect(36, rowY, 523, 24).stroke(borderColor);
 
           doc.font('Helvetica').fontSize(8).fillColor(mutedColor);
-          doc.text(`Employer PF: ${formatCurr(payslipData.pf_employer || 0)}`, 46, rowY + 8);
-          doc.text(`Employer ESIC: ${formatCurr(payslipData.esi_employer || 0)}`, 200, rowY + 8);
+          doc.text(`Employer PF: ${formatCurr(payslipData.pf_employer || 0)}`, 44, rowY + 8);
+          doc.text(`Employer ESIC: ${formatCurr(payslipData.esi_employer || 0)}`, 165, rowY + 8);
           doc.font('Helvetica-Bold').fillColor(primaryColor);
-          doc.text(`Total Monthly CTC: ${formatCurr(payslipData.ctc || (totalEarnings + (payslipData.pf_employer || 0) + (payslipData.esi_employer || 0)))}`, 360, rowY + 8);
+          doc.text(`Monthly CTC: ${formatCurr(monthlyCTCVal)}`, 280, rowY + 8);
+          doc.text(`Annual CTC: ${formatCurr(annualCTCVal)}`, 415, rowY + 8);
           rowY += 34;
         }
 

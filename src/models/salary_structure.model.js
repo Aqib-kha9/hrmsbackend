@@ -44,7 +44,22 @@ const SalaryStructure = sequelize.define('SalaryStructure', {
     type: DataTypes.DECIMAL(12, 2),
     defaultValue: 0,
   },
+  performance_allowance: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0,
+    comment: 'Performance allowance and incentive component (Req 2.4)',
+  },
+  annual_ctc: {
+    type: DataTypes.DECIMAL(12, 2),
+    defaultValue: 0,
+    comment: 'Annual Cost to Company (Monthly CTC × 12)',
+  },
   // Statutory flags
+  hra_applicable: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    comment: 'Whether HRA is enabled for this employee (Req 2.4)',
+  },
   pf_applicable: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
