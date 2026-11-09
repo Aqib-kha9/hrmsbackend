@@ -213,6 +213,12 @@ const Employee = sequelize.define('Employee', {
     allowNull: true,
     comment: 'IFSC code for NEFT/RTGS',
   },
+  payment_mode: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    defaultValue: 'Bank Transfer',
+    comment: 'Salary payment mode (Bank Transfer, Cheque, Cash)',
+  },
   // Statutory identifiers
   pan_number: {
     type: DataTypes.STRING(10),

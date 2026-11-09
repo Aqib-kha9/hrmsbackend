@@ -286,6 +286,7 @@ class AuthService {
           bank_name: employeeData.bank_name,
           bank_account_number: employeeData.bank_account_number,
           ifsc_code: employeeData.ifsc_code,
+          payment_mode: employeeData.payment_mode || 'Bank Transfer',
           // Statutory
           pan_number: employeeData.pan_number,
           aadhaar_number: employeeData.aadhaar_number || employeeData.aadhaar || null,
