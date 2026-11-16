@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const { validate } = require('../middleware/validate.middleware');
-const { updateProfileSchema, employeeQuerySchema } = require('../validators/employee.validator');
+const { updateProfileSchema, updateEmployeeSchema, employeeQuerySchema } = require('../validators/employee.validator');
 const { salaryStructureSchema } = require('../validators/auth.validator');
 const employeeController = require('../controllers/employee.controller');
 
@@ -19,7 +19,7 @@ router.get('/', requirePermission('employees:read'), validate(employeeQuerySchem
 router.get('/next-code', requirePermission('employees:create'), employeeController.getNextCode);
 router.get('/recently-added', requirePermission('employees:read'), employeeController.getRecentlyAdded);
 router.get('/:id', selfOrAdmin(), employeeController.getEmployeeById);
-router.patch('/:id', requirePermission('employees:update'), employeeController.updateEmployee);
+router.patch('/:id', requirePermission('employees:update'), validate(updateEmployeeSchema), employeeController.updateEmployee);
 router.delete('/:id', requirePermission('employees:delete'), employeeController.deleteEmployee);
 router.patch('/:id/status', requirePermission('employees:update'), employeeController.updateEmployeeStatus);
 router.patch('/:id/role', requirePermission('role_mgmt:update'), employeeController.updateEmployeeRole);
