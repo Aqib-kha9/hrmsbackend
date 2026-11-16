@@ -17,49 +17,49 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
     defaultValue: () => new Date().getFullYear(),
     comment: 'Calendar/Entitlement year (e.g. 2026)',
   },
-  // ── Privilege Leave (PL): 12 days per year, carry forward permitted (Req 2.6) ──
+  // ── Privilege / Earned Leave (PL / EL): 12 days per year, carry forward permitted ──
   pl_allocated: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 12.00,
-    comment: 'Annual Privilege Leave allocation (12 days/year)',
+    comment: 'Annual Privilege / Earned Leave (PL/EL) allocation (12 days/year)',
   },
   pl_carried_forward: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Privilege Leave carried forward from previous year',
+    comment: 'Privilege / Earned Leave carried forward from previous year',
   },
   pl_used: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Privilege Leave days consumed in the year',
+    comment: 'Privilege / Earned Leave days consumed in the year',
   },
   pl_lapsed: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Privilege Leave days lapsed in excess of carry-forward policy',
+    comment: 'Privilege / Earned Leave days lapsed in excess of carry-forward policy',
   },
-  // ── Earned Leave (EL): 12 days per year, carry forward permitted (Req 2.6) ──
+  // ── Earned Leave (EL): Merged with PL ──
   el_allocated: {
     type: DataTypes.DECIMAL(5, 2),
-    defaultValue: 12.00,
-    comment: 'Annual Earned Leave allocation (12 days/year)',
+    defaultValue: 0.00,
+    comment: 'Earned Leave allocation (merged with PL into PL/EL)',
   },
   el_carried_forward: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Earned Leave carried forward from previous year',
+    comment: 'Earned Leave carried forward (merged with PL)',
   },
   el_used: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Earned Leave days consumed in the year',
+    comment: 'Earned Leave days consumed (merged with PL)',
   },
   el_lapsed: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 0.00,
-    comment: 'Earned Leave days lapsed in excess of carry-forward policy',
+    comment: 'Earned Leave days lapsed (merged with PL)',
   },
-  // ── Casual Leave (CL): 12 days per year, lapses annually (Req 2.6) ──
+  // ── Casual Leave (CL): 12 days per year, lapses annually ──
   cl_allocated: {
     type: DataTypes.DECIMAL(5, 2),
     defaultValue: 12.00,
@@ -89,8 +89,8 @@ const LeaveBalance = sequelize.define('LeaveBalance', {
   // ── Legacy fields for backward compatibility ──
   available: {
     type: DataTypes.INTEGER,
-    defaultValue: 36,
-    comment: 'Legacy available leave balance (12 PL + 12 EL + 12 CL = 36 days)',
+    defaultValue: 24,
+    comment: 'Legacy available leave balance (12 PL/EL + 12 CL = 24 days)',
   },
   used: {
     type: DataTypes.INTEGER,

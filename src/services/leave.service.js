@@ -7,22 +7,22 @@ const notificationService = require('./notification.service');
 
 const DEFAULT_LEAVE_POLICY = {
   pl: {
-    name: 'Privilege Leave',
-    code: 'PL',
+    name: 'Privilege / Earned Leave',
+    code: 'PL/EL',
     entitlement: 12.0,
     carry_forward: true,
     max_carry_forward: 15.0,
     lapse: false,
-    description: '12 days/year annual entitlement with carry-forward permitted (Req 2.6)',
+    description: '12 days/year annual entitlement (combined PL / EL) with carry-forward permitted',
   },
   el: {
-    name: 'Earned Leave',
+    name: 'Earned Leave (Merged with PL)',
     code: 'EL',
-    entitlement: 12.0,
-    carry_forward: true,
-    max_carry_forward: 30.0,
+    entitlement: 0.0,
+    carry_forward: false,
+    max_carry_forward: 0.0,
     lapse: false,
-    description: '12 days/year annual entitlement with carry-forward permitted (Req 2.6)',
+    description: 'Merged with Privilege Leave into PL / EL (12 days total)',
   },
   cl: {
     name: 'Casual Leave',
@@ -31,8 +31,9 @@ const DEFAULT_LEAVE_POLICY = {
     carry_forward: false,
     max_carry_forward: 0.0,
     lapse: true,
-    description: '12 days/year annual entitlement with lapse at year-end (Req 2.6)',
+    description: '12 days/year annual entitlement with lapse at year-end',
   },
+  monthly_paid_limit: 2.0, // Maximum 2 paid leaves permitted per calendar month
 };
 
 class LeaveService {
@@ -78,8 +79,8 @@ class LeaveService {
 
   /**
    * Helper: Ensure annual leave balance record exists for the employee.
-   * Default Annual entitlement: 12 PL + 12 EL + 12 CL = 36 days/year (Req 2.6).
-   * Applies carry-forward for PL & EL and lapse for CL on year transition.
+   * Default Annual entitlement: 12 PL/EL + 12 CL = 24 days/year.
+   * Combined PL & EL is 12 days total (carry-forward permitted). CL is 12 days (lapses annually).
    */
   async _ensureAnnualBalance(employeeId, targetYear = null) {
     const currentYear = targetYear || new Date().getFullYear();
@@ -91,9 +92,9 @@ class LeaveService {
 
     if (!balance) {
       const plAlloc = Number(policy.pl?.entitlement ?? 12.00);
-      const elAlloc = Number(policy.el?.entitlement ?? 12.00);
+      const elAlloc = 0.00; // Merged into PL/EL
       const clAlloc = Number(policy.cl?.entitlement ?? 12.00);
-      const totalAlloc = plAlloc + elAlloc + clAlloc;
+      const totalAlloc = plAlloc + clAlloc; // 24.00
 
       balance = await LeaveBalance.create({
         employee_id: employeeId,
@@ -116,31 +117,46 @@ class LeaveService {
         admin_granted: 0,
         lapsed: 0,
       });
+    } else if (Number(balance.el_allocated) > 0.00 && Number(balance.pl_allocated) >= 12.00) {
+      // Auto-migrate legacy balance where PL was 12 and EL was 12 separately (total 36) -> unified 12 PL/EL (total 24)
+      const mergedPlUsed = Number(balance.pl_used || 0) + Number(balance.el_used || 0);
+      const mergedPlCf = Number(balance.pl_carried_forward || 0) + Number(balance.el_carried_forward || 0);
+      const clUsed = Number(balance.cl_used || 0);
+      const compOff = Number(balance.comp_off_balance || 0);
+      const totalAvail = Math.max(0, Math.round(24.00 + mergedPlCf + compOff - mergedPlUsed - clUsed));
+
+      await balance.update({
+        pl_allocated: 12.00,
+        el_allocated: 0.00,
+        el_carried_forward: 0.00,
+        el_used: 0.00,
+        el_lapsed: 0.00,
+        pl_used: mergedPlUsed,
+        pl_carried_forward: mergedPlCf,
+        available: totalAvail,
+      });
     } else if (balance.year !== currentYear) {
-      // Annual reset cycle applying approved carry-forward & lapse rules (Req 2.6):
-      // 1. PL: Carry-forward enabled up to max_carry_forward
-      const unusedPl = Math.max(0, Number(balance.pl_allocated || 12) + Number(balance.pl_carried_forward || 0) - Number(balance.pl_used || 0));
+      // Annual reset cycle applying approved carry-forward & lapse rules:
+      // 1. Combined PL / EL: Carry-forward enabled up to max_carry_forward
+      const totalPlElAlloc = Number(balance.pl_allocated || 12) + Number(balance.el_allocated || 0);
+      const totalPlElCf = Number(balance.pl_carried_forward || 0) + Number(balance.el_carried_forward || 0);
+      const totalPlElUsed = Number(balance.pl_used || 0) + Number(balance.el_used || 0);
+      const unusedPl = Math.max(0, totalPlElAlloc + totalPlElCf - totalPlElUsed);
       const maxPlCf = policy.pl?.max_carry_forward ?? 15.0;
       const plCf = policy.pl?.carry_forward !== false ? Math.min(unusedPl, maxPlCf) : 0.0;
       const plLapsed = Math.max(0, unusedPl - plCf);
 
-      // 2. EL: Carry-forward enabled up to max_carry_forward
-      const unusedEl = Math.max(0, Number(balance.el_allocated || 12) + Number(balance.el_carried_forward || 0) - Number(balance.el_used || 0));
-      const maxElCf = policy.el?.max_carry_forward ?? 30.0;
-      const elCf = policy.el?.carry_forward !== false ? Math.min(unusedEl, maxElCf) : 0.0;
-      const elLapsed = Math.max(0, unusedEl - elCf);
-
-      // 3. CL: Lapses annually (no carry-forward)
+      // 2. CL: Lapses annually (no carry-forward)
       const unusedCl = Math.max(0, Number(balance.cl_allocated || 12) - Number(balance.cl_used || 0));
       const clCf = 0.0; // strictly 0 as CL lapses
       const clLapsed = unusedCl;
 
-      const plAlloc = Number(policy.pl?.entitlement ?? 12.00);
-      const elAlloc = Number(policy.el?.entitlement ?? 12.00);
-      const clAlloc = Number(policy.cl?.entitlement ?? 12.00);
+      const plAlloc = Number(policy.pl?.entitlement ?? 12.00); // 12 PL/EL
+      const elAlloc = 0.00; // Merged into PL/EL
+      const clAlloc = Number(policy.cl?.entitlement ?? 12.00); // 12 CL
       const compOffPreserved = Number(balance.comp_off_balance || 0);
 
-      const totalAvail = Math.round(plAlloc + plCf + elAlloc + elCf + clAlloc + compOffPreserved);
+      const totalAvail = Math.round(plAlloc + plCf + clAlloc + compOffPreserved);
 
       await balance.update({
         year: currentYear,
@@ -149,16 +165,16 @@ class LeaveService {
         pl_used: 0.00,
         pl_lapsed: plLapsed,
         el_allocated: elAlloc,
-        el_carried_forward: elCf,
+        el_carried_forward: 0.00,
         el_used: 0.00,
-        el_lapsed: elLapsed,
+        el_lapsed: 0.00,
         cl_allocated: clAlloc,
         cl_carried_forward: 0.00,
         cl_used: 0.00,
         cl_lapsed: clLapsed,
         available: totalAvail,
         used: 0,
-        lapsed: Math.round(plLapsed + elLapsed + clLapsed),
+        lapsed: Math.round(plLapsed + clLapsed),
       });
     }
 
@@ -172,17 +188,10 @@ class LeaveService {
     const dur = Number(duration) || 1;
     const type = (leaveType || 'cl').toLowerCase();
 
-    if (type === 'pl') {
+    if (type === 'pl' || type === 'el' || type === 'pl_el') {
       const newUsed = Number(balance.pl_used || 0) + dur;
       await balance.update({
         pl_used: newUsed,
-        used: Number(balance.used || 0) + dur,
-        available: Math.max(0, Number(balance.available || 0) - dur),
-      });
-    } else if (type === 'el') {
-      const newUsed = Number(balance.el_used || 0) + dur;
-      await balance.update({
-        el_used: newUsed,
         used: Number(balance.used || 0) + dur,
         available: Math.max(0, Number(balance.available || 0) - dur),
       });
@@ -210,17 +219,10 @@ class LeaveService {
     const dur = Number(duration) || 1;
     const type = (leaveType || 'cl').toLowerCase();
 
-    if (type === 'pl') {
+    if (type === 'pl' || type === 'el' || type === 'pl_el') {
       const newUsed = Math.max(0, Number(balance.pl_used || 0) - dur);
       await balance.update({
         pl_used: newUsed,
-        used: Math.max(0, Number(balance.used || 0) - dur),
-        available: Number(balance.available || 0) + dur,
-      });
-    } else if (type === 'el') {
-      const newUsed = Math.max(0, Number(balance.el_used || 0) - dur);
-      await balance.update({
-        el_used: newUsed,
         used: Math.max(0, Number(balance.used || 0) - dur),
         available: Number(balance.available || 0) + dur,
       });
@@ -242,27 +244,22 @@ class LeaveService {
   }
 
   /**
-   * Get annual leave balance and entitlement for an employee (Req 2.6: PL, EL, CL).
+   * Get annual leave balance and entitlement for an employee.
+   * Policy: 12 PL/EL + 12 CL = 24 Total Annual Paid Leaves.
+   * Monthly Limit: Maximum 2 paid leaves per calendar month.
    */
   async getLeaveBalance(employeeId, targetYear = null) {
     const balance = await this._ensureAnnualBalance(employeeId, targetYear);
     const policy = await this.getLeavePolicy();
 
-    // Privilege Leave (PL) Breakdown
-    const plAllocated = Number(balance.pl_allocated != null ? balance.pl_allocated : 12.0);
-    const plCarried = Number(balance.pl_carried_forward || 0.0);
-    const plUsed = Number(balance.pl_used || 0.0);
-    const plLapsed = Number(balance.pl_lapsed || 0.0);
-    const plBalance = Math.max(0, (plAllocated + plCarried) - plUsed - plLapsed);
+    // Privilege / Earned Leave (PL / EL) Breakdown (12 days/year annual quota)
+    const plElAllocated = Number(balance.pl_allocated != null ? balance.pl_allocated : 12.0) + Number(balance.el_allocated || 0.0);
+    const plElCarried = Number(balance.pl_carried_forward || 0.0) + Number(balance.el_carried_forward || 0.0);
+    const plElUsed = Number(balance.pl_used || 0.0) + Number(balance.el_used || 0.0);
+    const plElLapsed = Number(balance.pl_lapsed || 0.0) + Number(balance.el_lapsed || 0.0);
+    const plElBalance = Math.max(0, (plElAllocated + plElCarried) - plElUsed - plElLapsed);
 
-    // Earned Leave (EL) Breakdown
-    const elAllocated = Number(balance.el_allocated != null ? balance.el_allocated : 12.0);
-    const elCarried = Number(balance.el_carried_forward || 0.0);
-    const elUsed = Number(balance.el_used || 0.0);
-    const elLapsed = Number(balance.el_lapsed || 0.0);
-    const elBalance = Math.max(0, (elAllocated + elCarried) - elUsed - elLapsed);
-
-    // Casual Leave (CL) Breakdown (Lapses annually, no carry forward)
+    // Casual Leave (CL) Breakdown (12 days/year annual quota, lapses annually)
     const clAllocated = Number(balance.cl_allocated != null ? balance.cl_allocated : 12.0);
     const clCarried = 0.0;
     const clUsed = Number(balance.cl_used || 0.0);
@@ -277,26 +274,58 @@ class LeaveService {
       where: { employee_id: employeeId, status: 'pending' },
     });
 
-    const totalPaidEntitlement = plAllocated + elAllocated + clAllocated + plCarried + elCarried;
-    const totalUsed = plUsed + elUsed + clUsed;
-    const totalRemaining = plBalance + elBalance + clBalance + compOffBal;
+    // Total Annual Entitlement = 12 (PL/EL) + 12 (CL) = 24 days (+ any carried forward)
+    const totalPaidEntitlement = plElAllocated + clAllocated + plElCarried;
+    const totalUsed = plElUsed + clUsed;
+    const totalRemaining = plElBalance + clBalance + compOffBal;
+
+    // Monthly Paid Leave Usage Calculation for current month (Max 2 paid leaves / calendar month)
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+    const monthStart = `${curYear}-${String(curMonth).padStart(2, '0')}-01`;
+    const lastDay = new Date(curYear, curMonth, 0).getDate();
+    const monthEnd = `${curYear}-${String(curMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const currentMonthPaidLeaves = await LeaveRequest.findAll({
+      where: {
+        employee_id: employeeId,
+        status: { [Op.in]: ['pending', 'approved'] },
+        is_paid: true,
+        from_date: { [Op.lte]: monthEnd },
+        to_date: { [Op.gte]: monthStart },
+      },
+    });
+
+    let paidTakenThisMonth = 0;
+    for (const req of currentMonthPaidLeaves) {
+      paidTakenThisMonth += this._apportionLeaveDaysToMonth(req, curYear, curMonth);
+    }
+    paidTakenThisMonth = Math.round(paidTakenThisMonth * 10) / 10;
+    const monthlyPaidLimit = 2.0;
+    const paidRemainingThisMonth = Math.max(0, Math.round((monthlyPaidLimit - paidTakenThisMonth) * 10) / 10);
 
     return {
       id: balance.id,
       employee_id: employeeId,
       year: balance.year,
-      // Privilege Leave (PL) breakdown
-      pl_allocated: plAllocated,
-      pl_carried_forward: plCarried,
-      pl_used: plUsed,
-      pl_lapsed: plLapsed,
-      pl_balance: plBalance,
-      // Earned Leave (EL) breakdown
-      el_allocated: elAllocated,
-      el_carried_forward: elCarried,
-      el_used: elUsed,
-      el_lapsed: elLapsed,
-      el_balance: elBalance,
+      // Combined PL / EL breakdown
+      pl_el_allocated: plElAllocated,
+      pl_el_carried_forward: plElCarried,
+      pl_el_used: plElUsed,
+      pl_el_lapsed: plElLapsed,
+      pl_el_balance: plElBalance,
+      // Aliases for backward compatibility with PL & EL callers
+      pl_allocated: plElAllocated,
+      pl_carried_forward: plElCarried,
+      pl_used: plElUsed,
+      pl_lapsed: plElLapsed,
+      pl_balance: plElBalance,
+      el_allocated: 0.0,
+      el_carried_forward: 0.0,
+      el_used: 0.0,
+      el_lapsed: 0.0,
+      el_balance: plElBalance,
       // Casual Leave (CL) breakdown
       cl_allocated: clAllocated,
       cl_carried_forward: clCarried,
@@ -305,23 +334,25 @@ class LeaveService {
       cl_balance: clBalance,
       // Compensatory Off (Comp-Off)
       comp_off_balance: compOffBal,
-      // Totals
-      total_annual_entitlement: totalPaidEntitlement,
+      // Monthly Paid Leave Policy Limits (Max 2 Paid Leaves / Month)
+      monthly_paid_leave_limit: monthlyPaidLimit,
+      paid_leaves_taken_this_month: paidTakenThisMonth,
+      paid_leaves_remaining_this_month: paidRemainingThisMonth,
+      // Totals (12 PL/EL + 12 CL = 24 Total)
+      total_annual_entitlement: 24.0,
       total_paid_entitlement: totalPaidEntitlement,
       total_used: totalUsed,
       total_remaining_balance: totalRemaining,
       pending_requests: pendingCount,
       // Policy configuration metadata
       carry_forward_info: {
-        pl: { enabled: policy.pl?.carry_forward !== false, carried_forward: plCarried, max_allowed: policy.pl?.max_carry_forward ?? 15 },
-        el: { enabled: policy.el?.carry_forward !== false, carried_forward: elCarried, max_allowed: policy.el?.max_carry_forward ?? 30 },
+        pl_el: { enabled: true, carried_forward: plElCarried, max_allowed: policy.pl?.max_carry_forward ?? 15 },
         cl: { enabled: false, carried_forward: 0, rule: 'Lapses annually at year-end' },
       },
       lapse_info: {
         cl_lapse_enabled: true,
         cl_lapsed: clLapsed,
-        pl_lapsed: plLapsed,
-        el_lapsed: elLapsed,
+        pl_el_lapsed: plElLapsed,
       },
       // Backward-compatible properties
       available: totalRemaining,
@@ -332,27 +363,28 @@ class LeaveService {
   }
 
   /**
-   * Apply for leave (PL, EL, CL, LWP, or other) (Req 2.6).
+   * Apply for leave (PL / EL, CL, Comp-Off, LWP).
+   * Enforces:
+   * 1. Total Annual Entitlement: 12 PL/EL + 12 CL = 24 Total
+   * 2. Monthly Limit: Max 2 paid leaves per calendar month
    */
   async applyLeave(employeeId, leaveData, isAdminOnBehalf = false) {
-    const { from_date, to_date, duration, reason, contact_during_leave, leave_type = 'cl' } = leaveData;
+    const { from_date, to_date, duration, reason, contact_during_leave, leave_type = 'pl_el' } = leaveData;
 
     const balanceData = await this.getLeaveBalance(employeeId);
     const reqDuration = Number(duration) || 1;
 
-    // Check specific balance according to leave category (Req 2.6)
-    const normalizedType = (leave_type || 'cl').toLowerCase();
-    if (normalizedType === 'pl') {
-      if (balanceData.pl_balance < reqDuration) {
+    // Normalize leave type: 'pl', 'el', 'pl_el' all map to unified PL / EL
+    let normalizedType = (leave_type || 'pl_el').toLowerCase();
+    if (normalizedType === 'pl' || normalizedType === 'el') {
+      normalizedType = 'pl_el';
+    }
+
+    // Check specific balance according to leave category (12 PL/EL, 12 CL)
+    if (normalizedType === 'pl_el') {
+      if (balanceData.pl_el_balance < reqDuration) {
         throw new AppError(
-          `Insufficient Privilege Leave (PL) balance. Available: ${balanceData.pl_balance} day(s), Requested: ${reqDuration} day(s).`,
-          400
-        );
-      }
-    } else if (normalizedType === 'el') {
-      if (balanceData.el_balance < reqDuration) {
-        throw new AppError(
-          `Insufficient Earned Leave (EL) balance. Available: ${balanceData.el_balance} day(s), Requested: ${reqDuration} day(s).`,
+          `Insufficient PL / EL balance. Available: ${balanceData.pl_el_balance} day(s), Requested: ${reqDuration} day(s).`,
           400
         );
       }
@@ -369,6 +401,76 @@ class LeaveService {
           `Insufficient Comp-Off balance. Available: ${balanceData.comp_off_balance} day(s), Requested: ${reqDuration} day(s).`,
           400
         );
+      }
+    }
+
+    // ── Monthly Paid Leave Restriction: Maximum 2 Paid Leaves per Calendar Month ──
+    // Unpaid leaves (LWP) are excluded from the 2-day paid limit.
+    // Paid leaves (PL / EL, CL, Comp-Off) are restricted to max 2.0 days in any calendar month.
+    if (normalizedType !== 'lwp') {
+      const from = new Date(from_date);
+      const to = new Date(to_date);
+
+      const startYear = from.getFullYear();
+      const startMonth = from.getMonth() + 1;
+      const endYear = to.getFullYear();
+      const endMonth = to.getMonth() + 1;
+
+      const MONTH_NAMES = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+
+      let curY = startYear;
+      let curM = startMonth;
+
+      while (curY < endYear || (curY === endYear && curM <= endMonth)) {
+        const mStart = `${curY}-${String(curM).padStart(2, '0')}-01`;
+        const lastDay = new Date(curY, curM, 0).getDate();
+        const mEnd = `${curY}-${String(curM).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+        // Number of days in THIS leave request that fall within month (curY, curM)
+        const requestedDaysInMonth = this._apportionLeaveDaysToMonth(
+          { from_date, to_date, duration: reqDuration },
+          curY,
+          curM
+        );
+
+        if (requestedDaysInMonth > 0) {
+          // Fetch existing active (pending or approved) paid leaves for this employee overlapping this month
+          const existingPaidLeaves = await LeaveRequest.findAll({
+            where: {
+              employee_id: employeeId,
+              status: { [Op.in]: ['pending', 'approved'] },
+              is_paid: true,
+              from_date: { [Op.lte]: mEnd },
+              to_date: { [Op.gte]: mStart },
+            },
+          });
+
+          let existingDaysInMonth = 0;
+          for (const exReq of existingPaidLeaves) {
+            existingDaysInMonth += this._apportionLeaveDaysToMonth(exReq, curY, curM);
+          }
+          existingDaysInMonth = Math.round(existingDaysInMonth * 10) / 10;
+
+          const totalPaidAfterRequest = Math.round((existingDaysInMonth + requestedDaysInMonth) * 10) / 10;
+          const monthLabel = `${MONTH_NAMES[curM - 1]} ${curY}`;
+
+          if (totalPaidAfterRequest > 2.0) {
+            throw new AppError(
+              `Monthly paid leave limit exceeded: Maximum 2 paid leaves are permitted per calendar month. For ${monthLabel}, you already have ${existingDaysInMonth} day(s) taken/pending. Adding ${requestedDaysInMonth} day(s) would make ${totalPaidAfterRequest} days, which exceeds the monthly limit of 2 days.`,
+              400
+            );
+          }
+        }
+
+        // Advance to next month
+        curM++;
+        if (curM > 12) {
+          curM = 1;
+          curY++;
+        }
       }
     }
 
@@ -535,8 +637,7 @@ class LeaveService {
           if (Number(req.duration) === 0.5) mHalfDays++;
 
           const type = (req.leave_type || 'cl').toLowerCase();
-          if (type === 'pl') mPlDays += daysInMonth;
-          else if (type === 'el') mElDays += daysInMonth;
+          if (type === 'pl' || type === 'el' || type === 'pl_el') mPlDays += daysInMonth;
           else if (type === 'cl') mClDays += daysInMonth;
           else if (type === 'lwp') mLwpDays += daysInMonth;
           else if (type === 'comp_off') mCompOffDays += daysInMonth;
@@ -548,13 +649,15 @@ class LeaveService {
         month_key: monthKey,
         month_name: name,
         total_days_off: Math.round(mTotalDays * 10) / 10,
+        pl_el_days: Math.round(mPlDays * 10) / 10,
         pl_days: Math.round(mPlDays * 10) / 10,
-        el_days: Math.round(mElDays * 10) / 10,
+        el_days: 0,
         cl_days: Math.round(mClDays * 10) / 10,
         lwp_days: Math.round(mLwpDays * 10) / 10,
         comp_off_days: Math.round(mCompOffDays * 10) / 10,
         half_days: mHalfDays,
         records_count: mRecordsCount,
+        monthly_paid_limit: 2.0,
       };
     });
 
@@ -670,13 +773,18 @@ class LeaveService {
       const plCf = bal ? Number(bal.pl_carried_forward || 0.0) : 0.0;
       const plUsed = bal ? Number(bal.pl_used || 0.0) : 0.0;
       const plLapsed = bal ? Number(bal.pl_lapsed || 0.0) : 0.0;
-      const plBal = Math.max(0, (plAlloc + plCf) - plUsed - plLapsed);
 
-      const elAlloc = bal ? Number(bal.el_allocated != null ? bal.el_allocated : 12.0) : 12.0;
+      const elAlloc = bal ? Number(bal.el_allocated || 0.0) : 0.0;
       const elCf = bal ? Number(bal.el_carried_forward || 0.0) : 0.0;
       const elUsed = bal ? Number(bal.el_used || 0.0) : 0.0;
       const elLapsed = bal ? Number(bal.el_lapsed || 0.0) : 0.0;
-      const elBal = Math.max(0, (elAlloc + elCf) - elUsed - elLapsed);
+
+      // Combined PL / EL (12 days total)
+      const plElAlloc = plAlloc + elAlloc; // 12
+      const plElCf = plCf + elCf;
+      const plElUsed = plUsed + elUsed;
+      const plElLapsed = plLapsed + elLapsed;
+      const plElBal = Math.max(0, (plElAlloc + plElCf) - plElUsed - plElLapsed);
 
       const clAlloc = bal ? Number(bal.cl_allocated != null ? bal.cl_allocated : 12.0) : 12.0;
       const clUsed = bal ? Number(bal.cl_used || 0.0) : 0.0;
@@ -685,9 +793,10 @@ class LeaveService {
 
       const compOffBal = bal ? Number(bal.comp_off_balance || 0.0) : 0.0;
 
-      const totalPaidEntitlement = plAlloc + elAlloc + clAlloc + plCf + elCf;
-      const totalTaken = plUsed + elUsed + clUsed;
-      const remainingBalance = plBal + elBal + clBal + compOffBal;
+      // Total Paid Entitlement = 12 (PL/EL) + 12 (CL) = 24 Total (+ CF)
+      const totalPaidEntitlement = plElAlloc + clAlloc + plElCf;
+      const totalTaken = plElUsed + clUsed;
+      const remainingBalance = plElBal + clBal + compOffBal;
 
       // Month specific stats if requested
       let monthDaysTaken = 0;
@@ -703,8 +812,7 @@ class LeaveService {
           if (daysInMonth > 0) {
             monthDaysTaken += daysInMonth;
             const type = (req.leave_type || 'cl').toLowerCase();
-            if (type === 'pl') monthPlDays += daysInMonth;
-            else if (type === 'el') monthElDays += daysInMonth;
+            if (type === 'pl' || type === 'el' || type === 'pl_el') monthPlDays += daysInMonth;
             else if (type === 'cl') monthClDays += daysInMonth;
             else if (type === 'lwp') monthLwpDays += daysInMonth;
           }
@@ -720,14 +828,20 @@ class LeaveService {
         designation: emp.designation || 'Staff',
         date_of_joining: emp.date_of_joining,
         total_paid_entitlement: totalPaidEntitlement,
-        pl_balance: plBal,
-        pl_allocated: plAlloc,
-        pl_carried_forward: plCf,
-        pl_used: plUsed,
-        el_balance: elBal,
-        el_allocated: elAlloc,
-        el_carried_forward: elCf,
-        el_used: elUsed,
+        // Combined PL / EL
+        pl_el_balance: plElBal,
+        pl_el_allocated: plElAlloc,
+        pl_el_carried_forward: plElCf,
+        pl_el_used: plElUsed,
+        // Backward compatibility aliases
+        pl_balance: plElBal,
+        pl_allocated: plElAlloc,
+        pl_carried_forward: plElCf,
+        pl_used: plElUsed,
+        el_balance: plElBal,
+        el_allocated: 0.0,
+        el_carried_forward: 0.0,
+        el_used: 0.0,
         cl_balance: clBal,
         cl_allocated: clAlloc,
         cl_used: clUsed,
@@ -735,11 +849,10 @@ class LeaveService {
         comp_off_balance: compOffBal,
         total_leave_taken: totalTaken,
         remaining_leave_balance: remainingBalance,
+        monthly_paid_limit: 2.0,
         carry_forward_info: {
-          pl_carry_forward: policy.pl?.carry_forward !== false,
-          pl_carried_forward: plCf,
-          el_carry_forward: policy.el?.carry_forward !== false,
-          el_carried_forward: elCf,
+          pl_el_carry_forward: true,
+          pl_el_carried_forward: plElCf,
           cl_carry_forward: false,
         },
         lapse_info: {
@@ -750,8 +863,9 @@ class LeaveService {
           month: targetMonth,
           month_name: new Date(targetYear, targetMonth - 1, 1).toLocaleString('en-US', { month: 'long' }),
           days_taken: Math.round(monthDaysTaken * 10) / 10,
+          pl_el_days: Math.round(monthPlDays * 10) / 10,
           pl_days: Math.round(monthPlDays * 10) / 10,
-          el_days: Math.round(monthElDays * 10) / 10,
+          el_days: 0,
           cl_days: Math.round(monthClDays * 10) / 10,
           lwp_days: Math.round(monthLwpDays * 10) / 10,
         } : null,
@@ -1004,7 +1118,7 @@ class LeaveService {
       employee_id: employeeId,
       granted_count: grantAmount,
       comp_off_balance: newCompOff,
-      total_remaining_balance: Number(balance.pl_allocated || 12) + Number(balance.el_allocated || 12) + Number(balance.cl_allocated || 12) + newCompOff,
+      total_remaining_balance: Number(balance.available || 0),
       reason,
     };
   }

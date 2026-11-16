@@ -14,8 +14,8 @@ const LeaveRequest = sequelize.define('LeaveRequest', {
   },
   leave_type: {
     type: DataTypes.STRING(20),
-    defaultValue: 'cl',
-    comment: 'pl = Privilege Leave (12/yr), el = Earned Leave (12/yr), cl = Casual Leave (12/yr), lwp = Leave Without Pay, comp_off = Compensatory Off, other = Other',
+    defaultValue: 'pl_el',
+    comment: 'pl_el = Privilege / Earned Leave (12/yr), cl = Casual Leave (12/yr), lwp = Leave Without Pay, comp_off = Compensatory Off, other = Other',
   },
   from_date: {
     type: DataTypes.DATEONLY,

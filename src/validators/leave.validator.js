@@ -1,7 +1,7 @@
 const Joi = require('joi');
 
 const applyLeaveSchema = Joi.object({
-  leave_type: Joi.string().valid('pl', 'el', 'cl', 'lwp', 'comp_off', 'other').default('cl'),
+  leave_type: Joi.string().valid('pl_el', 'pl', 'el', 'cl', 'lwp', 'comp_off', 'other').default('pl_el'),
   employee_id: Joi.number().integer().optional().messages({
     'number.base': 'Employee ID must be a valid number',
   }),
