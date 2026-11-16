@@ -108,6 +108,12 @@ class PayslipPdfService {
         printField('A/C No:', payslipData.bank_account_number, col2, y);
         printField('PAN:', payslipData.pan_number, col3, y);
 
+        y += 15;
+        const dojFormatted = payslipData.date_of_joining ? new Date(payslipData.date_of_joining).toLocaleDateString('en-GB') : '--';
+        printField('DOJ:', dojFormatted, col1, y);
+        printField('IFSC Code:', payslipData.ifsc_code, col2, y);
+        printField('ESIC No:', payslipData.esic_number, col3, y);
+
         y += 20;
 
         // ── Attendance Information Section (Req 3.2) ──

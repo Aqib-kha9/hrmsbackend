@@ -1106,7 +1106,7 @@ class PayrollLedgerService {
       order: [['effective_from', 'DESC']]
     });
 
-    const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index, cycle.year);
+    const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
     const slabs = await getPTSlabs();
 
     const row = {
@@ -1139,6 +1139,14 @@ class PayrollLedgerService {
 
     const calc = this._calculateRow(row, dynamicDays, slabs);
 
+    const musterDays = Number(entry.total_muster_days) || 30;
+    const effectiveLwp = entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0
+      ? Number(entry.lwp_days)
+      : Math.max(0, dynamicDays - calc.payableDays);
+    const computedPayableDays = entry.manual_payable_days !== null && entry.manual_payable_days !== undefined
+      ? Number(entry.manual_payable_days)
+      : Math.max(0, musterDays - effectiveLwp);
+
     const payslipData = {
       employee_name: emp.name,
       emp_code: emp.emp_code,
@@ -1154,11 +1162,14 @@ class PayrollLedgerService {
       pan_number: emp.pan_number,
       bank_name: emp.bank_name,
       bank_account_number: emp.bank_account_number,
+      ifsc_code: emp.ifsc_code,
+      date_of_joining: emp.date_of_joining,
+      esic_number: emp.esic_number,
       // Attendance (Req 3.2)
-      total_muster_days: entry.total_muster_days || dynamicDays,
+      total_muster_days: musterDays,
       present_days: entry.present_days !== undefined && entry.present_days !== null && Number(entry.present_days) > 0 ? Number(entry.present_days) : calc.payableDays,
-      payable_days: calc.payableDays,
-      lwp_days: entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0 ? Number(entry.lwp_days) : Math.max(0, dynamicDays - calc.payableDays),
+      payable_days: computedPayableDays,
+      lwp_days: effectiveLwp,
       // Standard / Fixed Structure (Req 3.3 & Req 2.4)
       fixed_gross: calc.fixedGross,
       fixed_basic: calc.fixedBasic,
