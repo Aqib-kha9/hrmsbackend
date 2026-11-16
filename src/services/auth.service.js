@@ -260,154 +260,167 @@ class AuthService {
     const monthlyCTC = gross + pfEmployer + esiEmployer;
     const annualCTC = Number(employeeData.annual_ctc) || (monthlyCTC * 12);
 
-    // Execute onboarding in a transaction
+    // Execute onboarding in a transaction with automatic deadlock retry
     let result;
-    try {
-      result = await sequelize.transaction(async (t) => {
-        // 1. Create Employee
-        const employee = await Employee.create({
-          emp_code: empCode,
-          name: employeeData.name,
-          email: employeeData.email,
-          phone: employeeData.phone,
-          password: hashedPassword,
-          designation: employeeData.designation,
-          department: employeeData.department,
-          hr_manager: employeeData.hr_manager || employeeData.hrManager || null,
-          role: employeeData.role || 'employee',
-          date_of_joining: employeeData.date_of_joining,
-          date_of_birth: employeeData.date_of_birth,
-          gender: employeeData.gender,
-          marital_status: employeeData.marital_status || 'unmarried',
-          father_or_husband_name: employeeData.father_or_husband_name || employeeData.father_husband_name || null,
-          address: employeeData.address,
-          office_id: employeeData.office_id,
-          company_id: employeeData.company_id || null,
-          status: 'active',
-          is_first_login: true,
-          // Salary denormalized (Req 2.4)
-          fixed_gross: gross,
-          basic_salary: basic,
-          performance_allowance: performanceAllowance,
-          annual_ctc: annualCTC,
-          hra_applicable: hraApplicable,
-          pf_applicable: employeeData.pf_applicable !== false,
-          pf_ceiling: employeeData.pf_ceiling || false,
-          pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
-          pf_employment_date: employeeData.pf_employment_date || null,
-          esic_applicable: employeeData.esic_applicable || false,
-          esic_contribution_mode: employeeData.esic_contribution_mode || 'shared',
-          esic_number: employeeData.esic_number || null,
-          // Bank
-          bank_name: employeeData.bank_name,
-          bank_account_number: employeeData.bank_account_number,
-          ifsc_code: employeeData.ifsc_code,
-          payment_mode: employeeData.payment_mode || 'Bank Transfer',
-          // Statutory
-          pan_number: panClean || null,
-          aadhaar_number: aadhaarClean || null,
-          lic_details: employeeData.lic_details || null,
-          blood_group: employeeData.blood_group || null,
-          pf_number: employeeData.pf_number,
-          uan: employeeData.uan,
-          // Location
-          location: employeeData.location,
-          company_name: employeeData.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
-          // Emergency
-          emergency_contact_name: employeeData.emergency_contact_name,
-          emergency_contact_phone: employeeData.emergency_contact_phone || employeeData.emergency_phone || null,
-          emergency_contact_relation: employeeData.emergency_contact_relation,
-          // Shift configuration
-          shift_start_time: employeeData.shift_start_time || null,
-          shift_end_time: employeeData.shift_end_time || null,
-          is_rotational_shift: Boolean(employeeData.is_rotational_shift),
-          half_day_late_minutes: employeeData.half_day_late_minutes ?? 60,
-        }, { transaction: t });
+    const MAX_RETRIES = 3;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        result = await sequelize.transaction(async (t) => {
+          // 1. Create Employee
+          const employee = await Employee.create({
+            emp_code: empCode,
+            name: employeeData.name,
+            email: employeeData.email,
+            phone: employeeData.phone,
+            password: hashedPassword,
+            designation: employeeData.designation,
+            department: employeeData.department,
+            hr_manager: employeeData.hr_manager || employeeData.hrManager || null,
+            role: employeeData.role || 'employee',
+            date_of_joining: employeeData.date_of_joining,
+            date_of_birth: employeeData.date_of_birth,
+            gender: employeeData.gender,
+            marital_status: employeeData.marital_status || 'unmarried',
+            father_or_husband_name: employeeData.father_or_husband_name || employeeData.father_husband_name || null,
+            address: employeeData.address,
+            office_id: employeeData.office_id,
+            company_id: employeeData.company_id || null,
+            status: 'active',
+            is_first_login: true,
+            // Salary denormalized (Req 2.4)
+            fixed_gross: gross,
+            basic_salary: basic,
+            performance_allowance: performanceAllowance,
+            annual_ctc: annualCTC,
+            hra_applicable: hraApplicable,
+            pf_applicable: employeeData.pf_applicable !== false,
+            pf_ceiling: employeeData.pf_ceiling || false,
+            pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
+            pf_employment_date: employeeData.pf_employment_date || null,
+            esic_applicable: employeeData.esic_applicable || false,
+            esic_contribution_mode: employeeData.esic_contribution_mode || 'shared',
+            esic_number: employeeData.esic_number || null,
+            // Bank
+            bank_name: employeeData.bank_name,
+            bank_account_number: employeeData.bank_account_number,
+            ifsc_code: employeeData.ifsc_code,
+            payment_mode: employeeData.payment_mode || 'Bank Transfer',
+            // Statutory
+            pan_number: panClean || null,
+            aadhaar_number: aadhaarClean || null,
+            lic_details: employeeData.lic_details || null,
+            blood_group: employeeData.blood_group || null,
+            pf_number: employeeData.pf_number,
+            uan: employeeData.uan,
+            // Location
+            location: employeeData.location,
+            company_name: employeeData.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+            // Emergency
+            emergency_contact_name: employeeData.emergency_contact_name,
+            emergency_contact_phone: employeeData.emergency_contact_phone || employeeData.emergency_phone || null,
+            emergency_contact_relation: employeeData.emergency_contact_relation,
+            // Shift configuration
+            shift_start_time: employeeData.shift_start_time || null,
+            shift_end_time: employeeData.shift_end_time || null,
+            is_rotational_shift: Boolean(employeeData.is_rotational_shift),
+            half_day_late_minutes: employeeData.half_day_late_minutes ?? 60,
+          }, { transaction: t });
 
-        // 2. Create SalaryStructure (source of truth)
-        const salaryStructure = await SalaryStructure.create({
-          employee_id: employee.id,
-          fixed_gross: gross,
-          basic_salary: basic,
-          hra: hra,
-          special_allowance: specialAllowance,
-          other_allowance: otherAllowance,
-          conveyance: conveyance,
-          medical_allowance: medicalAllowance,
-          performance_allowance: performanceAllowance,
-          annual_ctc: annualCTC,
-          hra_applicable: hraApplicable,
-          pf_applicable: employeeData.pf_applicable !== false,
-          pf_ceiling: employeeData.pf_ceiling || false,
-          pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
-          pf_employee_rate: employeeData.pf_employee_rate ?? 0.12,
-          pf_employer_rate: employeeData.pf_employer_rate ?? 0.12,
-          esic_applicable: employeeData.esic_applicable || false,
-          esic_contribution_mode: employeeData.esic_contribution_mode || 'shared',
-          esic_employee_rate: employeeData.esic_employee_rate ?? 0.0075,
-          esic_employer_rate: employeeData.esic_employer_rate ?? 0.0325,
-          pt_applicable: employeeData.pt_applicable !== false,
-          effective_work_days: effectiveWorkDays,
-          effective_from: employeeData.date_of_joining || new Date(),
-          created_by: issuedBy,
-          updated_by: issuedBy,
-        }, { transaction: t });
+          // 2. Create SalaryStructure (source of truth)
+          const salaryStructure = await SalaryStructure.create({
+            employee_id: employee.id,
+            fixed_gross: gross,
+            basic_salary: basic,
+            hra: hra,
+            special_allowance: specialAllowance,
+            other_allowance: otherAllowance,
+            conveyance: conveyance,
+            medical_allowance: medicalAllowance,
+            performance_allowance: performanceAllowance,
+            annual_ctc: annualCTC,
+            hra_applicable: hraApplicable,
+            pf_applicable: employeeData.pf_applicable !== false,
+            pf_ceiling: employeeData.pf_ceiling || false,
+            pf_contribution_mode: employeeData.pf_contribution_mode || 'shared',
+            pf_employee_rate: employeeData.pf_employee_rate ?? 0.12,
+            pf_employer_rate: employeeData.pf_employer_rate ?? 0.12,
+            esic_applicable: employeeData.esic_applicable || false,
+            esic_contribution_mode: employeeData.esic_contribution_mode || 'shared',
+            esic_employee_rate: employeeData.esic_employee_rate ?? 0.0075,
+            esic_employer_rate: employeeData.esic_employer_rate ?? 0.0325,
+            pt_applicable: employeeData.pt_applicable !== false,
+            effective_work_days: effectiveWorkDays,
+            effective_from: employeeData.date_of_joining || new Date(),
+            created_by: issuedBy,
+            updated_by: issuedBy,
+          }, { transaction: t });
 
-        // 3. Create SalaryRevision (initial record)
-        await SalaryRevision.create({
-          employee_id: employee.id,
-          previous_gross: null,
-          new_gross: gross,
-          previous_basic: null,
-          new_basic: basic,
-          revision_type: SALARY_REVISION_TYPES.INITIAL,
-          effective_date: employeeData.date_of_joining || new Date(),
-          remarks: 'Initial salary setup during onboarding',
-          approved_by: issuedBy,
-        }, { transaction: t });
+          // 3. Create SalaryRevision (initial record)
+          await SalaryRevision.create({
+            employee_id: employee.id,
+            previous_gross: null,
+            new_gross: gross,
+            previous_basic: null,
+            new_basic: basic,
+            revision_type: SALARY_REVISION_TYPES.INITIAL,
+            effective_date: employeeData.date_of_joining || new Date(),
+            remarks: 'Initial salary setup during onboarding',
+            approved_by: issuedBy,
+          }, { transaction: t });
 
-        const now = new Date();
-        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+          const now = new Date();
+          const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-        // 4. Create initial LeaveBalance record for the new employee
-        await LeaveBalance.create({
-          employee_id: employee.id,
-          available: LEAVE_ACCRUAL.MONTHLY_ACCRUAL,
-          used: 0,
-          admin_granted: 0,
-          lapsed: 0,
-          last_accrual_month: currentMonth,
-          consecutive_no_usage_months: 0,
-        }, { transaction: t });
+          // 4. Create initial LeaveBalance record for the new employee
+          await LeaveBalance.create({
+            employee_id: employee.id,
+            available: LEAVE_ACCRUAL.MONTHLY_ACCRUAL,
+            used: 0,
+            admin_granted: 0,
+            lapsed: 0,
+            last_accrual_month: currentMonth,
+            consecutive_no_usage_months: 0,
+          }, { transaction: t });
 
-        // 4b. Create Appointment Letter record
-        const appointmentLetter = await Letter.create({
-          employee_id: employee.id,
-          type: 'appointment',
-          title: `Appointment Letter — ${employeeData.designation || 'Employment'}`,
-          content: `Appointment letter issued for the position of ${employeeData.designation || 'N/A'} effective ${employeeData.date_of_joining || 'joining date'}.`,
-          issued_date: new Date(),
-          issued_by: issuedBy,
-          status: 'issued',
-        }, { transaction: t });
+          // 4b. Create Appointment Letter record
+          const appointmentLetter = await Letter.create({
+            employee_id: employee.id,
+            type: 'appointment',
+            title: `Appointment Letter — ${employeeData.designation || 'Employment'}`,
+            content: `Appointment letter issued for the position of ${employeeData.designation || 'N/A'} effective ${employeeData.date_of_joining || 'joining date'}.`,
+            issued_date: new Date(),
+            issued_by: issuedBy,
+            status: 'issued',
+          }, { transaction: t });
 
-        // 4c. Create Welcome Notification
-        await Notification.create({
-          employee_id: employee.id,
-          title: 'Welcome Aboard! 🎉',
-          message: `Welcome to Apaar Logistics & Cold Supply Chain Pvt Ltd, ${employeeData.name}! Your employee code is ${employee.emp_code}. Please complete your profile and acknowledge your offer letter.`,
-          type: 'success',
-          category: 'onboarding',
-          is_read: false,
-        }, { transaction: t });
+          // 4c. Create Welcome Notification
+          await Notification.create({
+            employee_id: employee.id,
+            title: 'Welcome Aboard! 🎉',
+            message: `Welcome to Apaar Logistics & Cold Supply Chain Pvt Ltd, ${employeeData.name}! Your employee code is ${employee.emp_code}. Please complete your profile and acknowledge your offer letter.`,
+            type: 'success',
+            category: 'onboarding',
+            is_read: false,
+          }, { transaction: t });
 
-        return { employee: employee.toJSON(), salaryStructure: salaryStructure.toJSON(), appointmentLetter: appointmentLetter.toJSON() };
-      });
+          return { employee: employee.toJSON(), salaryStructure: salaryStructure.toJSON(), appointmentLetter: appointmentLetter.toJSON() };
+        });
 
-      logger.info(`Employee ${result.employee.emp_code} onboarded successfully with salary structure, appointment letter, and welcome notification`);
-    } catch (error) {
-      logger.error(`Onboarding failed for ${employeeData.email}:`, error);
-      throw new AppError(`Onboarding failed: ${error.message}`, 500);
+        logger.info(`Employee ${result.employee.emp_code} onboarded successfully with salary structure, appointment letter, and welcome notification`);
+        break; // Transaction committed successfully
+      } catch (error) {
+        const isDeadlock = error.parent?.errno === 1213 ||
+                           error.original?.errno === 1213 ||
+                           error.parent?.code === 'ER_LOCK_DEADLOCK' ||
+                           (error.message && error.message.toLowerCase().includes('deadlock'));
+        if (isDeadlock && attempt < MAX_RETRIES) {
+          logger.warn(`Deadlock detected during onboarding for ${employeeData.email} (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${attempt * 200}ms...`);
+          await new Promise(r => setTimeout(r, attempt * 200));
+          continue;
+        }
+        logger.error(`Onboarding failed for ${employeeData.email}:`, error);
+        throw new AppError(`Onboarding failed: ${error.message}`, 500);
+      }
     }
 
     // 5. Generate offer letter PDF + send email (outside transaction — if fails, employee is still created)
