@@ -67,6 +67,8 @@ const registerSchema = Joi.object({
   // ── Statutory identifiers ──
   pan_number: Joi.string().max(10).optional().allow(null, ''),
   pf_number: Joi.string().max(30).optional().allow(null, ''),
+  esic_number: Joi.string().max(50).optional().allow(null, ''),
+  lic_details: Joi.string().max(100).optional().allow(null, ''),
   uan: Joi.string()
     .pattern(/^\d{12}$/)
     .required()
