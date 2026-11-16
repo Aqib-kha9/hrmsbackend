@@ -36,11 +36,11 @@ class CompanyController {
    */
   async createCompany(req, res, next) {
     try {
-      const { name, email, phone, website, city, state, address } = req.body;
+      const { name, code, email, phone, website, city, state, address } = req.body;
       if (!name || !name.trim()) {
         return res.status(400).json({ success: false, message: 'Company name is required' });
       }
-      const company = await companyService.createCompany({ name: name.trim(), email, phone, website, city, state, address });
+      const company = await companyService.createCompany({ name: name.trim(), code, email, phone, website, city, state, address });
       return success(res, 'Company created', company, 201);
     } catch (err) {
       logger.error(`Create company error: ${err.message}`);

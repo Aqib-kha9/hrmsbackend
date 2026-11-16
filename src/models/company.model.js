@@ -15,8 +15,7 @@ const Company = sequelize.define('Company', {
   code: {
     type: DataTypes.STRING(10),
     allowNull: true,
-    defaultValue: 'APA',
-    comment: 'Company-specific prefix for employee ID generation, e.g. APA',
+    comment: 'Company-specific prefix for employee ID generation, e.g. AS, BM, AL, PE',
   },
   email: {
     type: DataTypes.STRING(150),

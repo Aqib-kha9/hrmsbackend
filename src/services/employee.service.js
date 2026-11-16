@@ -519,11 +519,12 @@ class EmployeeService {
 
   /**
    * Company-Specific Sequential Employee ID Generator Details (Req 2.2)
-   * Follows company-specific identification format: Company prefix followed by unique sequential identifier (e.g. APA001).
-   * Ensures IDs are unique across the system and sequence is maintained per prefix.
+   * Follows company-specific identification format: Company prefix followed by unique sequential identifier.
+   * e.g. AS001 for AE Solutions, BM001 for BP Marketing, AL001 for Apaar Logistics, PE001 for PJ Enterprises.
+   * Ensures IDs are unique across the system and sequence is maintained per company prefix.
    */
   async getNextEmployeeCodeDetails(target = null) {
-    let prefix = 'APA';
+    let prefix = '';
     let company = null;
 
     if (target) {
@@ -531,39 +532,68 @@ class EmployeeService {
         const compId = parseInt(target, 10);
         company = await Company.findByPk(compId);
         if (company) {
-          prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+          prefix = (company.code || this.deriveCompanyPrefix(company.name) || '').trim().toUpperCase();
         }
       } else if (typeof target === 'string') {
         const clean = target.trim();
         if (/^\d+$/.test(clean)) {
           company = await Company.findByPk(parseInt(clean, 10));
           if (company) {
-            prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+            prefix = (company.code || this.deriveCompanyPrefix(company.name) || '').trim().toUpperCase();
           }
         } else {
-          prefix = clean.toUpperCase();
+          // Check if clean matches a company code or name
+          const found = await Company.findOne({
+            where: {
+              [Op.or]: [
+                sequelize.where(sequelize.fn('LOWER', sequelize.col('code')), clean.toLowerCase()),
+                sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), clean.toLowerCase()),
+              ],
+            },
+          });
+          if (found) {
+            company = found;
+            prefix = (found.code || this.deriveCompanyPrefix(found.name) || clean).trim().toUpperCase();
+          } else {
+            prefix = clean.toUpperCase();
+          }
         }
       } else if (typeof target === 'object') {
         if (target.companyId || target.company_id) {
           const compId = parseInt(target.companyId || target.company_id, 10);
           company = await Company.findByPk(compId);
           if (company) {
-            prefix = (company.code || this.deriveCompanyPrefix(company.name) || 'APA').trim().toUpperCase();
+            prefix = (company.code || this.deriveCompanyPrefix(company.name) || '').trim().toUpperCase();
           }
         }
-        if (target.prefix) {
+        if (!prefix && target.companyName) {
+          const found = await Company.findOne({
+            where: sequelize.where(sequelize.fn('LOWER', sequelize.col('name')), String(target.companyName).toLowerCase().trim()),
+          });
+          if (found) {
+            company = found;
+            prefix = (found.code || this.deriveCompanyPrefix(found.name) || '').trim().toUpperCase();
+          }
+        }
+        if (!prefix && target.prefix) {
           prefix = String(target.prefix).trim().toUpperCase();
         }
       }
-    } else {
+    }
+
+    if (!company) {
       const defaultCompany = await Company.findOne({ where: { is_active: true }, order: [['id', 'ASC']] });
       if (defaultCompany) {
-        prefix = (defaultCompany.code || this.deriveCompanyPrefix(defaultCompany.name) || 'APA').trim().toUpperCase();
         company = defaultCompany;
+        if (!prefix) {
+          prefix = (defaultCompany.code || this.deriveCompanyPrefix(defaultCompany.name) || '').trim().toUpperCase();
+        }
       }
     }
 
-    if (!prefix || prefix.length === 0) prefix = 'APA';
+    if (!prefix || prefix.length === 0) {
+      prefix = company ? (company.code || this.deriveCompanyPrefix(company.name) || 'EMP') : 'EMP';
+    }
 
     const employees = await Employee.findAll({
       attributes: ['emp_code'],
@@ -584,7 +614,7 @@ class EmployeeService {
       }
     }
 
-    // Standard sequence starts at 1, formatted as 3-digit zero-padded number (e.g. APA001)
+    // Standard sequence starts at 1, formatted as 3-digit zero-padded number (e.g. AS001, BM001, AL001, PE001)
     const nextNum = maxNum > 0 ? maxNum + 1 : 1;
     const padded = String(nextNum).padStart(3, '0');
     const nextCode = `${prefix}${padded}`;
@@ -601,19 +631,49 @@ class EmployeeService {
   }
 
   deriveCompanyPrefix(name) {
-    if (!name) return 'APA';
+    if (!name) return 'EMP';
     const clean = name.trim();
-    if (/^apaar/i.test(clean)) return 'APA';
-    if (/^bp\s*marketing/i.test(clean)) return 'BPM';
-    if (/^ae\b/i.test(clean)) return 'AE';
-    if (/^pj\b/i.test(clean)) return 'PJ';
 
-    const words = clean.split(/\s+/).filter(Boolean);
+    // Specific client requirements for company prefixes:
+    // AS - AE Solutions
+    // AL - Apaar Logistics
+    // BM - BP Marketing
+    // PE - PJ Enterprises
+    if (/^ae\s*solutions/i.test(clean) || /^ae\b/i.test(clean)) return 'AS';
+    if (/^apaar\s*logistics/i.test(clean) || /^apaar/i.test(clean)) return 'AL';
+    if (/^bp\s*marketing/i.test(clean) || /^bp\b/i.test(clean)) return 'BM';
+    if (/^pj\s*enterprises/i.test(clean) || /^pj\b/i.test(clean)) return 'PE';
+
+    // Future companies added by admin:
+    // Filter out common corporate stop words to form clean acronyms
+    const stopWords = new Set([
+      'pvt', 'ltd', 'private', 'limited', 'llp', 'inc', 'corp', 'corporation',
+      'company', 'co', 'and', '&', 'the'
+    ]);
+
+    let words = clean
+      .split(/[\s\-_]+/)
+      .map(w => w.replace(/[^a-zA-Z0-9]/g, ''))
+      .filter(w => w.length > 0 && !stopWords.has(w.toLowerCase()));
+
+    if (words.length === 0) {
+      words = clean
+        .split(/[\s\-_]+/)
+        .map(w => w.replace(/[^a-zA-Z0-9]/g, ''))
+        .filter(w => w.length > 0);
+    }
+
     if (words.length >= 2) {
       const acronym = words.map(w => w[0].toUpperCase()).join('').slice(0, 4);
       if (acronym.length >= 2) return acronym;
     }
-    return clean.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'APA';
+
+    if (words.length === 1) {
+      const single = words[0].toUpperCase();
+      return single.length >= 2 ? single.slice(0, Math.min(3, single.length)) : single.padEnd(2, 'X');
+    }
+
+    return clean.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'EMP';
   }
 
   /**

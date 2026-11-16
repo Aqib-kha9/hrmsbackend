@@ -3,19 +3,49 @@ const { PAGINATION } = require('../utils/constants');
 const logger = require('../utils/logger');
 
 function deriveCompanyPrefix(name) {
-  if (!name) return 'APA';
+  if (!name) return 'EMP';
   const clean = name.trim();
-  if (/^apaar/i.test(clean)) return 'APA';
-  if (/^bp\s*marketing/i.test(clean)) return 'BPM';
-  if (/^ae\b/i.test(clean)) return 'AE';
-  if (/^pj\b/i.test(clean)) return 'PJ';
 
-  const words = clean.split(/\s+/).filter(Boolean);
+  // Specific client requirements for company prefixes:
+  // AS - AE Solutions
+  // AL - Apaar Logistics
+  // BM - BP Marketing
+  // PE - PJ Enterprises
+  if (/^ae\s*solutions/i.test(clean) || /^ae\b/i.test(clean)) return 'AS';
+  if (/^apaar\s*logistics/i.test(clean) || /^apaar/i.test(clean)) return 'AL';
+  if (/^bp\s*marketing/i.test(clean) || /^bp\b/i.test(clean)) return 'BM';
+  if (/^pj\s*enterprises/i.test(clean) || /^pj\b/i.test(clean)) return 'PE';
+
+  // Future companies added by admin:
+  // Filter out common corporate stop words to form clean acronyms
+  const stopWords = new Set([
+    'pvt', 'ltd', 'private', 'limited', 'llp', 'inc', 'corp', 'corporation',
+    'company', 'co', 'and', '&', 'the'
+  ]);
+
+  let words = clean
+    .split(/[\s\-_]+/)
+    .map(w => w.replace(/[^a-zA-Z0-9]/g, ''))
+    .filter(w => w.length > 0 && !stopWords.has(w.toLowerCase()));
+
+  if (words.length === 0) {
+    words = clean
+      .split(/[\s\-_]+/)
+      .map(w => w.replace(/[^a-zA-Z0-9]/g, ''))
+      .filter(w => w.length > 0);
+  }
+
   if (words.length >= 2) {
     const acronym = words.map(w => w[0].toUpperCase()).join('').slice(0, 4);
     if (acronym.length >= 2) return acronym;
   }
-  return clean.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'APA';
+
+  if (words.length === 1) {
+    const single = words[0].toUpperCase();
+    return single.length >= 2 ? single.slice(0, Math.min(3, single.length)) : single.padEnd(2, 'X');
+  }
+
+  return clean.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'EMP';
 }
 
 class CompanyService {
