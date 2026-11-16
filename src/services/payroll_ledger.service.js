@@ -229,6 +229,37 @@ class PayrollLedgerService {
       });
     }
 
+    // Ensure all active employees (excluding pure admins) have entries in the current cycle
+    const allActiveEmployees = await Employee.findAll({
+      where: {
+        status: 'active',
+        [Op.and]: [
+          sequelize.where(sequelize.fn('LOWER', sequelize.col('role')), { [Op.notIn]: ['admin', 'super_admin'] })
+        ]
+      }
+    });
+    const existingEmployeeIds = new Set((cycle.entries || []).map(e => e.employee_id));
+    const missingEmployees = allActiveEmployees.filter(e => !existingEmployeeIds.has(e.id));
+    if (missingEmployees.length > 0) {
+      const newEntries = missingEmployees.map(emp => ({
+        cycle_id: cycle.id,
+        employee_id: emp.id,
+        absent_days: 0,
+        leave_adjustment_days: 0,
+        status: cycle.status === 'Paid' ? 'Paid' : 'Draft',
+      }));
+      await PayrollEntry.bulkCreate(newEntries);
+      // Re-fetch cycle with all entries
+      cycle = await PayrollCycle.findOne({
+        where: { id: cycle.id },
+        include: [{
+          model: PayrollEntry,
+          as: 'entries',
+          include: [{ model: Employee, as: 'employee', include: [{ model: Office, as: 'office' }, { model: Company, as: 'company' }, { model: SalaryStructure, as: 'salaryStructures' }] }],
+        }],
+      });
+    }
+
     // Sync absent days from MonthlyAttendance (source of truth) + add elapsed-day pro-rating
     const { MonthlyAttendance, Loan, LeaveRequest } = require('../models');
     const monthlyStats = await MonthlyAttendance.findAll({
@@ -262,7 +293,9 @@ class PayrollLedgerService {
       loanMap.set(loan.employee_id, currentEmi + Number(loan.emi_amount));
     });
 
-    const rows = (cycle.entries || []).map(entry => {
+    const rows = (cycle.entries || [])
+      .filter(entry => entry.employee)
+      .map(entry => {
       const emp = entry.employee;
       const monthly = monthlyMap.get(emp.id);
       const absentDays = monthly
@@ -461,7 +494,9 @@ class PayrollLedgerService {
       order: [['name', 'ASC']],
     });
 
-    const rows = (cycle.entries || []).map(entry => {
+    const rows = (cycle.entries || [])
+      .filter(entry => entry.employee)
+      .map(entry => {
       const emp = entry.employee;
       const calculation = this._calculateRow({
         ...emp.toJSON(),
