@@ -159,6 +159,40 @@ const cancelTourSchema = Joi.object({
   reason: Joi.string().allow('', null).max(500).optional(),
 });
 
+const regularizeApplySchema = Joi.object({
+  date: Joi.string().required(),
+  regularization_type: Joi.string().valid(
+    'forgot_punch',
+    'forgot_check_in',
+    'forgot_check_out',
+    'on_duty',
+    'wfh',
+    'technical_issue',
+    'other'
+  ).default('forgot_punch'),
+  requested_check_in: Joi.string().pattern(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/).allow('', null).optional(),
+  requested_check_out: Joi.string().pattern(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/).allow('', null).optional(),
+  reason: Joi.string().min(3).max(1000).required(),
+});
+
+const regularizeListQuerySchema = Joi.object({
+  status: Joi.string().valid('all', 'pending', 'approved', 'rejected', 'cancelled').optional(),
+  company_id: Joi.number().integer().optional(),
+  office_id: Joi.number().integer().optional(),
+  department: Joi.string().allow('', null).optional(),
+  search: Joi.string().allow('', null).optional(),
+  month: Joi.number().integer().min(1).max(12).optional(),
+  year: Joi.number().integer().min(2020).max(2030).optional(),
+  page: Joi.number().integer().min(1).optional(),
+  limit: Joi.number().integer().min(1).max(100).optional(),
+});
+
+const regularizeActionSchema = Joi.object({
+  action: Joi.string().valid('approved', 'rejected').required(),
+  admin_remarks: Joi.string().allow('', null).max(500).optional(),
+  status: Joi.string().valid('present', 'half_day').optional().default('present'),
+});
+
 module.exports = {
   punchInSchema,
   punchOutSchema,
@@ -171,4 +205,7 @@ module.exports = {
   tourListQuerySchema,
   cancelTourSchema,
   weeklyOffConfigSchema,
+  regularizeApplySchema,
+  regularizeListQuerySchema,
+  regularizeActionSchema,
 };

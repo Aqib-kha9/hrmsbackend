@@ -125,6 +125,16 @@ async function startServer() {
       logger.info('✅ Database models synced with safe sync() fallback');
     }
 
+    // Ensure AttendanceRegularization table is created
+    try {
+      if (models.AttendanceRegularization) {
+        await models.AttendanceRegularization.sync();
+        logger.info('✅ AttendanceRegularization table synced');
+      }
+    } catch (regErr) {
+      logger.warn('AttendanceRegularization sync warning:', regErr.message);
+    }
+
     // Ensure RBAC system roles and permissions exist
     try {
       const roleCount = await models.Role.count();

@@ -3,7 +3,22 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize, selfOrAdmin, requirePermission } = require('../middleware/role.middleware');
 const { validate } = require('../middleware/validate.middleware');
-const { punchInSchema, punchOutSchema, monthlyQuerySchema, manualEntrySchema, adminLiveQuerySchema, adminHistoryQuerySchema, adminMonthlyQuerySchema, markTourSchema, tourListQuerySchema, cancelTourSchema, weeklyOffConfigSchema } = require('../validators/attendance.validator');
+const {
+  punchInSchema,
+  punchOutSchema,
+  monthlyQuerySchema,
+  manualEntrySchema,
+  adminLiveQuerySchema,
+  adminHistoryQuerySchema,
+  adminMonthlyQuerySchema,
+  markTourSchema,
+  tourListQuerySchema,
+  cancelTourSchema,
+  weeklyOffConfigSchema,
+  regularizeApplySchema,
+  regularizeListQuerySchema,
+  regularizeActionSchema,
+} = require('../validators/attendance.validator');
 const attendanceController = require('../controllers/attendance.controller');
 
 // All routes require authentication
@@ -41,5 +56,15 @@ router.patch('/admin/tours/:id/cancel', requirePermission('attendance:update'), 
 
 // Employee: Check if currently on tour (mobile app punch screen)
 router.get('/tour-status', attendanceController.getTourStatus);
+
+// ── Attendance Regularisation Routes ──
+// Employee routes
+router.post('/regularize', validate(regularizeApplySchema), attendanceController.applyRegularization);
+router.get('/regularize/my-requests', attendanceController.getMyRegularizations);
+router.patch('/regularize/:id/cancel', attendanceController.cancelRegularization);
+
+// Admin/HR routes
+router.get('/admin/regularize/requests', requirePermission('attendance:read'), validate(regularizeListQuerySchema, 'query'), attendanceController.getAllRegularizations);
+router.patch('/admin/regularize/:id/action', requirePermission('attendance:update'), validate(regularizeActionSchema), attendanceController.reviewRegularization);
 
 module.exports = router;

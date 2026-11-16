@@ -127,6 +127,11 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
     defaultValue: 'none',
     comment: 'Compensation treatment for working on weekly off / Sunday (Req 2.5 D)',
   },
+  is_regularized: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether attendance was regularized through employee request (Req Attendance Regularization)',
+  },
 }, {
   tableName: 'attendance_records',
   indexes: [

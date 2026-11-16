@@ -31,6 +31,7 @@ const AuthorisedSignatory = require('./authorised_signatory.model');
 const Role = require('./role.model');
 const Permission = require('./permission.model');
 const RolePermission = require('./role_permission.model');
+const AttendanceRegularization = require('./attendance_regularization.model');
 
 // ── Define Associations ──
 
@@ -171,6 +172,14 @@ OnboardingInvitation.belongsTo(Employee, { foreignKey: 'approved_by', as: 'appro
 // Letter → AuthorisedSignatory
 Letter.belongsTo(AuthorisedSignatory, { foreignKey: 'signatory_id', as: 'signatory' });
 
+// AttendanceRegularization Associations
+Employee.hasMany(AttendanceRegularization, { foreignKey: 'employee_id', as: 'regularizationRequests' });
+AttendanceRegularization.belongsTo(Employee, { foreignKey: 'employee_id', as: 'employee' });
+AttendanceRegularization.belongsTo(Employee, { foreignKey: 'approved_by', as: 'approver' });
+Employee.hasMany(AttendanceRegularization, { foreignKey: 'approved_by', as: 'approvedRegularizations' });
+AttendanceRecord.hasMany(AttendanceRegularization, { foreignKey: 'attendance_record_id', as: 'regularizations' });
+AttendanceRegularization.belongsTo(AttendanceRecord, { foreignKey: 'attendance_record_id', as: 'attendanceRecord' });
+
 module.exports = {
   sequelize,
   Employee,
@@ -180,6 +189,7 @@ module.exports = {
   MonthlyAttendance,
   LeaveBalance,
   LeaveRequest,
+  AttendanceRegularization,
   Payslip,
   SalaryComponent,
   Loan,

@@ -1,4 +1,5 @@
 const attendanceService = require('../services/attendance.service');
+const regularizationService = require('../services/regularization.service');
 const { success, paginated } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -263,6 +264,70 @@ class AttendanceController {
       return success(res, 'Tour status fetched', result, 200);
     } catch (err) {
       logger.error(`Get tour status error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // ── Attendance Regularisation Endpoints ──
+
+  // Employee: Apply for attendance regularisation
+  async applyRegularization(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const result = await regularizationService.applyRegularization(employeeId, req.body);
+      return success(res, 'Attendance regularisation request submitted successfully', result, 201);
+    } catch (err) {
+      logger.error(`Apply regularisation error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Employee: Get their own regularisation requests
+  async getMyRegularizations(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const result = await regularizationService.getMyRegularizations(employeeId, req.query);
+      return success(res, 'Regularisation requests fetched', result, 200);
+    } catch (err) {
+      logger.error(`Get my regularisations error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Employee: Cancel pending regularisation request
+  async cancelRegularization(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const { id } = req.params;
+      const result = await regularizationService.cancelRegularization(employeeId, id);
+      return success(res, 'Regularisation request cancelled', result, 200);
+    } catch (err) {
+      logger.error(`Cancel regularisation error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Admin/HR: Get all regularisation requests with filters, summary & pagination
+  async getAllRegularizations(req, res, next) {
+    try {
+      const result = await regularizationService.getAllRegularizations(req.query);
+      return success(res, 'Regularisation requests fetched', result, 200);
+    } catch (err) {
+      logger.error(`Get all regularisations error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Admin/HR: Review (Approve or Reject) regularisation request
+  async reviewRegularization(req, res, next) {
+    try {
+      const approverId = req.employee.id;
+      const { id } = req.params;
+      const result = await regularizationService.reviewRegularization(approverId, id, req.body);
+      const actionMsg = req.body.action === 'approved' ? 'approved and attendance updated' : 'rejected';
+      return success(res, `Regularisation request ${actionMsg} successfully`, result, 200);
+    } catch (err) {
+      logger.error(`Review regularisation error: ${err.message}`);
       return next(err);
     }
   }
