@@ -12,17 +12,18 @@ const applyLeaveSchema = Joi.object({
     if (isNaN(d.getTime())) {
       return helpers.error('date.format');
     }
-    // Compare date-only (strip time) so same-day applications are allowed
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Allow retrospective applications up to 1 year back
+    const pastLimit = new Date();
+    pastLimit.setFullYear(pastLimit.getFullYear() - 1);
+    pastLimit.setHours(0, 0, 0, 0);
     const inputDay = new Date(d);
     inputDay.setHours(0, 0, 0, 0);
-    if (inputDay < today) {
+    if (inputDay < pastLimit) {
       return helpers.error('date.min');
     }
     return d.toISOString().split('T')[0];
   }).required().messages({
-    'date.min': 'Start date cannot be in the past',
+    'date.min': 'Start date cannot be older than 1 year',
     'date.format': 'Start date must be a valid date (YYYY-MM-DD)',
     'any.required': 'Start date is required',
   }),
