@@ -199,6 +199,12 @@ class AuthService {
     const companyId = employeeData.company_id;
     const employeeService = require('./employee.service');
 
+    // Mandatory Universal Account Number (UAN) validation
+    const uanClean = employeeData.uan ? String(employeeData.uan).trim().replace(/\s/g, '') : '';
+    if (!uanClean || !/^\d{12}$/.test(uanClean)) {
+      throw new AppError('Universal Account Number (UAN) is mandatory and must be exactly 12 digits (e.g. 101234567890)', 400);
+    }
+
     if (!empCode || empCode === '' || empCode.startsWith('TEMP')) {
       empCode = await employeeService.getNextEmployeeCode(companyId);
     }
@@ -311,7 +317,7 @@ class AuthService {
             lic_details: employeeData.lic_details || null,
             blood_group: employeeData.blood_group || null,
             pf_number: employeeData.pf_number,
-            uan: employeeData.uan,
+            uan: uanClean,
             // Location
             location: employeeData.location,
             company_name: employeeData.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',

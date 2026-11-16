@@ -46,7 +46,9 @@ const updateEmployeeSchema = Joi.object({
   pf_applicable: Joi.boolean().optional(),
   pf_ceiling: Joi.boolean().optional(),
   pf_number: Joi.string().max(50).allow('', null).optional(),
-  uan: Joi.string().max(20).allow('', null).optional(),
+  uan: Joi.string().pattern(/^\d{12}$/).allow('', null).optional().messages({
+    'string.pattern.base': 'UAN must be exactly 12 digits (e.g. 101234567890)',
+  }),
   pf_employment_date: Joi.date().allow(null).optional(),
   esic_applicable: Joi.boolean().optional(),
   esic_number: Joi.string().max(50).allow('', null).optional(),

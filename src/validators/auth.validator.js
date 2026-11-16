@@ -67,7 +67,14 @@ const registerSchema = Joi.object({
   // ── Statutory identifiers ──
   pan_number: Joi.string().max(10).optional().allow(null, ''),
   pf_number: Joi.string().max(30).optional().allow(null, ''),
-  uan: Joi.string().max(12).optional().allow(null, ''),
+  uan: Joi.string()
+    .pattern(/^\d{12}$/)
+    .required()
+    .messages({
+      'any.required': 'UAN (Universal Account Number) is required',
+      'string.empty': 'UAN (Universal Account Number) cannot be empty',
+      'string.pattern.base': 'UAN must be exactly 12 digits (e.g. 101234567890)',
+    }),
 
   // ── Location / Company ──
   location: Joi.string().max(150).optional().allow(null, ''),

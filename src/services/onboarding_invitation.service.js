@@ -320,6 +320,11 @@ class OnboardingInvitationService {
       throw new AppError('No submission data found to approve for this invitation', 400);
     }
 
+    const uanValue = String(overrides.uan || data.uan || '').trim().replace(/\s/g, '');
+    if (!uanValue || !/^\d{12}$/.test(uanValue)) {
+      throw new AppError('Universal Account Number (UAN) is mandatory and must be exactly 12 digits (e.g. 101234567890)', 400);
+    }
+
     // Prepare complete employee registration payload with all overrides and submitted candidate data
     const employeePayload = {
       emp_code: overrides.emp_code || data.emp_code || '',
@@ -365,7 +370,7 @@ class OnboardingInvitationService {
       esic_employer_rate: overrides.esic_employer_rate !== undefined ? overrides.esic_employer_rate : 0.0325,
       pt_applicable: overrides.pt_applicable !== undefined ? overrides.pt_applicable : true,
       pf_number: overrides.pf_number || data.pf_number || null,
-      uan: overrides.uan || data.uan || null,
+      uan: uanValue,
       lic_details: overrides.lic_details || data.lic_details || null,
       emergency_contact_name: overrides.emergency_contact_name || data.emergency_contact_name || null,
       emergency_contact_relation: overrides.emergency_contact_relation || data.emergency_contact_relation || null,
