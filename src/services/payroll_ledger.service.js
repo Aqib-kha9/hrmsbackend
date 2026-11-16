@@ -1106,6 +1106,21 @@ class PayrollLedgerService {
       order: [['effective_from', 'DESC']]
     });
 
+    // Resolve exact ledger calculation matching the Monthly Salary List & Configure Modal
+    let calculatedRow = null;
+    try {
+      const ledger = await this.getCurrentLedger();
+      if (ledger && ledger.cycle && ledger.cycle.id === cycle.id) {
+        calculatedRow = ledger.rows.find(r => r.id === Number(entryId));
+      }
+      if (!calculatedRow) {
+        const pastLedger = await this.getLedgerByCycleId(cycle.id);
+        calculatedRow = pastLedger.rows.find(r => r.id === Number(entryId));
+      }
+    } catch (e) {
+      logger.warn(`Could not resolve ledger row for payslip PDF: ${e.message}`);
+    }
+
     const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
     const slabs = await getPTSlabs();
 
@@ -1137,15 +1152,21 @@ class PayrollLedgerService {
       performance_allowance: structure?.performance_allowance || emp.performance_allowance || 0,
     };
 
-    const calc = this._calculateRow(row, dynamicDays, slabs);
+    const fallbackCalc = this._calculateRow(row, dynamicDays, slabs);
+    const calc = calculatedRow || fallbackCalc;
 
-    const musterDays = Number(entry.total_muster_days) || 30;
-    const effectiveLwp = entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0
-      ? Number(entry.lwp_days)
-      : Math.max(0, dynamicDays - calc.payableDays);
-    const computedPayableDays = entry.manual_payable_days !== null && entry.manual_payable_days !== undefined
-      ? Number(entry.manual_payable_days)
-      : Math.max(0, musterDays - effectiveLwp);
+    const musterDays = Number(entry.total_muster_days) || Number(calculatedRow?.totalMusterDays) || 30;
+    const effectiveLwp = calculatedRow?.lwpDays !== undefined && calculatedRow?.lwpDays !== null
+      ? Number(calculatedRow.lwpDays)
+      : (entry.lwp_days !== undefined && entry.lwp_days !== null && Number(entry.lwp_days) > 0
+          ? Number(entry.lwp_days)
+          : Math.max(0, dynamicDays - (calc.payableDays || 0)));
+
+    const computedPayableDays = calculatedRow?.payableDays !== undefined
+      ? Number(calculatedRow.payableDays)
+      : (entry.manual_payable_days !== null && entry.manual_payable_days !== undefined
+          ? Number(entry.manual_payable_days)
+          : Math.max(0, musterDays - effectiveLwp));
 
     const payslipData = {
       employee_name: emp.name,
@@ -1167,7 +1188,7 @@ class PayrollLedgerService {
       esic_number: emp.esic_number,
       // Attendance (Req 3.2)
       total_muster_days: musterDays,
-      present_days: entry.present_days !== undefined && entry.present_days !== null && Number(entry.present_days) > 0 ? Number(entry.present_days) : calc.payableDays,
+      present_days: calculatedRow?.presentDays ?? (entry.present_days ? Number(entry.present_days) : computedPayableDays),
       payable_days: computedPayableDays,
       lwp_days: effectiveLwp,
       // Standard / Fixed Structure (Req 3.3 & Req 2.4)
@@ -1175,10 +1196,10 @@ class PayrollLedgerService {
       fixed_basic: calc.fixedBasic,
       fixed_hra: calc.fixedHra,
       fixed_other: calc.fixedOther,
-      fixed_conveyance: calc.fixedConv,
-      fixed_medical: calc.fixedMed,
-      fixed_special: calc.fixedSpec,
-      fixed_performance: calc.fixedPerf,
+      fixed_conveyance: calc.fixedConv || 0,
+      fixed_medical: calc.fixedMed || 0,
+      fixed_special: calc.fixedSpec || 0,
+      fixed_performance: calc.fixedPerf || 0,
       // Earnings & Deductions (Req 3.3 & Req 2.4)
       basic_salary: calc.basic,
       hra: calc.hra,
@@ -1190,13 +1211,13 @@ class PayrollLedgerService {
       bonus: Number(entry.bonus) || 0,
       incentive: Number(entry.incentive) || 0,
       previous_arrears: Number(entry.previous_arrears) || 0,
-      total_earnings: calc.totalEarnings,
-      gross_salary: calc.totalEarnings,
+      total_earnings: calc.totalEarnings || calc.proratedGross,
+      gross_salary: calc.totalEarnings || calc.proratedGross,
       pf_employee: calc.pf,
       esi_employee: calc.esi,
       professional_tax: calc.pt,
-      loan_deduction: Number(entry.loan_deduction) || 0,
-      other_deduction: Number(entry.other_deduction) || 0,
+      loan_deduction: Number(entry.loan_deduction) || Number(calc.loanDeduction) || 0,
+      other_deduction: Number(entry.other_deduction) || Number(calc.otherDeduction) || 0,
       total_deductions: calc.grossDeductions,
       net_salary: calc.net,
       pf_employer: calc.pfEmployer,
