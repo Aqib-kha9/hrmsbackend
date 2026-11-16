@@ -117,22 +117,29 @@ class LeaveService {
         admin_granted: 0,
         lapsed: 0,
       });
-    } else if (Number(balance.el_allocated) > 0.00 && Number(balance.pl_allocated) >= 12.00) {
-      // Auto-migrate legacy balance where PL was 12 and EL was 12 separately (total 36) -> unified 12 PL/EL (total 24)
-      const mergedPlUsed = Number(balance.pl_used || 0) + Number(balance.el_used || 0);
-      const mergedPlCf = Number(balance.pl_carried_forward || 0) + Number(balance.el_carried_forward || 0);
+    } else if (
+      Number(balance.el_allocated) !== 0.00 ||
+      Number(balance.el_carried_forward) !== 0.00 ||
+      Number(balance.pl_carried_forward) === 12.00 ||
+      Number(balance.pl_allocated) !== 12.00 ||
+      Number(balance.cl_allocated) !== 12.00 ||
+      Number(balance.available) > 24
+    ) {
+      // Strictly ensure PL/EL is 12 days total (not 12+12=24). el_allocated is 0. No phantom 12 CF.
+      const plUsed = Number(balance.pl_used || 0) + Number(balance.el_used || 0);
       const clUsed = Number(balance.cl_used || 0);
       const compOff = Number(balance.comp_off_balance || 0);
-      const totalAvail = Math.max(0, Math.round(24.00 + mergedPlCf + compOff - mergedPlUsed - clUsed));
+      const totalAvail = Math.max(0, 24 - plUsed - clUsed + compOff);
 
       await balance.update({
         pl_allocated: 12.00,
+        pl_carried_forward: 0.00,
         el_allocated: 0.00,
         el_carried_forward: 0.00,
         el_used: 0.00,
         el_lapsed: 0.00,
-        pl_used: mergedPlUsed,
-        pl_carried_forward: mergedPlCf,
+        cl_allocated: 12.00,
+        cl_carried_forward: 0.00,
         available: totalAvail,
       });
     } else if (balance.year !== currentYear) {
@@ -252,15 +259,15 @@ class LeaveService {
     const balance = await this._ensureAnnualBalance(employeeId, targetYear);
     const policy = await this.getLeavePolicy();
 
-    // Privilege / Earned Leave (PL / EL) Breakdown (12 days/year annual quota)
-    const plElAllocated = Number(balance.pl_allocated != null ? balance.pl_allocated : 12.0) + Number(balance.el_allocated || 0.0);
-    const plElCarried = Number(balance.pl_carried_forward || 0.0) + Number(balance.el_carried_forward || 0.0);
-    const plElUsed = Number(balance.pl_used || 0.0) + Number(balance.el_used || 0.0);
-    const plElLapsed = Number(balance.pl_lapsed || 0.0) + Number(balance.el_lapsed || 0.0);
+    // Privilege / Earned Leave (PL / EL) Breakdown (strictly 12 days/year annual quota)
+    const plElAllocated = 12.0;
+    const plElCarried = Number(balance.pl_carried_forward || 0.0);
+    const plElUsed = Number(balance.pl_used || 0.0);
+    const plElLapsed = Number(balance.pl_lapsed || 0.0);
     const plElBalance = Math.max(0, (plElAllocated + plElCarried) - plElUsed - plElLapsed);
 
-    // Casual Leave (CL) Breakdown (12 days/year annual quota, lapses annually)
-    const clAllocated = Number(balance.cl_allocated != null ? balance.cl_allocated : 12.0);
+    // Casual Leave (CL) Breakdown (strictly 12 days/year annual quota, lapses annually)
+    const clAllocated = 12.0;
     const clCarried = 0.0;
     const clUsed = Number(balance.cl_used || 0.0);
     const clLapsed = Number(balance.cl_lapsed || 0.0);
@@ -274,8 +281,8 @@ class LeaveService {
       where: { employee_id: employeeId, status: 'pending' },
     });
 
-    // Total Annual Entitlement = 12 (PL/EL) + 12 (CL) = 24 days (+ any carried forward)
-    const totalPaidEntitlement = plElAllocated + clAllocated + plElCarried;
+    // Total Annual Entitlement = strictly 12 (PL/EL) + 12 (CL) = 24 days total (+ genuine carried forward)
+    const totalPaidEntitlement = 24.0 + plElCarried;
     const totalUsed = plElUsed + clUsed;
     const totalRemaining = plElBalance + clBalance + compOffBal;
 
@@ -779,22 +786,22 @@ class LeaveService {
       const elUsed = bal ? Number(bal.el_used || 0.0) : 0.0;
       const elLapsed = bal ? Number(bal.el_lapsed || 0.0) : 0.0;
 
-      // Combined PL / EL (12 days total)
-      const plElAlloc = plAlloc + elAlloc; // 12
-      const plElCf = plCf + elCf;
-      const plElUsed = plUsed + elUsed;
-      const plElLapsed = plLapsed + elLapsed;
+      // Combined PL / EL (strictly 12 days total)
+      const plElAlloc = 12.0;
+      const plElCf = Number(bal?.pl_carried_forward || 0.0);
+      const plElUsed = Number(bal?.pl_used || 0.0);
+      const plElLapsed = Number(bal?.pl_lapsed || 0.0);
       const plElBal = Math.max(0, (plElAlloc + plElCf) - plElUsed - plElLapsed);
 
-      const clAlloc = bal ? Number(bal.cl_allocated != null ? bal.cl_allocated : 12.0) : 12.0;
-      const clUsed = bal ? Number(bal.cl_used || 0.0) : 0.0;
-      const clLapsed = bal ? Number(bal.cl_lapsed || 0.0) : 0.0;
+      const clAlloc = 12.0;
+      const clUsed = Number(bal?.cl_used || 0.0);
+      const clLapsed = Number(bal?.cl_lapsed || 0.0);
       const clBal = Math.max(0, clAlloc - clUsed - clLapsed);
 
-      const compOffBal = bal ? Number(bal.comp_off_balance || 0.0) : 0.0;
+      const compOffBal = Number(bal?.comp_off_balance || 0.0);
 
       // Total Paid Entitlement = 12 (PL/EL) + 12 (CL) = 24 Total (+ CF)
-      const totalPaidEntitlement = plElAlloc + clAlloc + plElCf;
+      const totalPaidEntitlement = 24.0 + plElCf;
       const totalTaken = plElUsed + clUsed;
       const remainingBalance = plElBal + clBal + compOffBal;
 
