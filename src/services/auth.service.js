@@ -165,16 +165,32 @@ class AuthService {
     }
 
     // Check PAN if provided (Req 23)
-    if (employeeData.pan_number) {
-      const existingPan = await Employee.findOne({ where: { pan_number: employeeData.pan_number } });
+    const panClean = employeeData.pan_number ? employeeData.pan_number.trim().toUpperCase() : null;
+    if (panClean) {
+      const existingPan = await Employee.findOne({ where: { pan_number: panClean } });
       if (existingPan) {
         if (existingPan.status === 'resigned') {
           throw new AppError(
-            `An employee with PAN "${employeeData.pan_number}" has previously resigned from the organization (Emp ID: ${existingPan.emp_code}, Name: ${existingPan.name}). Please use the Re-Hiring workflow.`,
+            `An employee with PAN "${panClean}" has previously resigned from the organization (Emp ID: ${existingPan.emp_code}, Name: ${existingPan.name}). Please use the Re-Hiring workflow.`,
             409
           );
         }
-        throw new AppError(`Employee with PAN ${employeeData.pan_number} already exists (${existingPan.emp_code})`, 409);
+        throw new AppError(`Employee with PAN ${panClean} already exists (${existingPan.emp_code} - ${existingPan.name})`, 409);
+      }
+    }
+
+    // Check Aadhaar if provided
+    const aadhaarClean = (employeeData.aadhaar_number || employeeData.aadhaar) ? (employeeData.aadhaar_number || employeeData.aadhaar).toString().trim() : null;
+    if (aadhaarClean && aadhaarClean.length === 12) {
+      const existingAadhaar = await Employee.findOne({ where: { aadhaar_number: aadhaarClean } });
+      if (existingAadhaar) {
+        if (existingAadhaar.status === 'resigned') {
+          throw new AppError(
+            `An employee with Aadhaar ending in "${aadhaarClean.slice(-4)}" has previously resigned from the organization (Emp ID: ${existingAadhaar.emp_code}, Name: ${existingAadhaar.name}). Please use the Re-Hiring workflow.`,
+            409
+          );
+        }
+        throw new AppError(`Employee with Aadhaar ending in ${aadhaarClean.slice(-4)} already exists (${existingAadhaar.emp_code} - ${existingAadhaar.name})`, 409);
       }
     }
 
@@ -288,8 +304,8 @@ class AuthService {
           ifsc_code: employeeData.ifsc_code,
           payment_mode: employeeData.payment_mode || 'Bank Transfer',
           // Statutory
-          pan_number: employeeData.pan_number,
-          aadhaar_number: employeeData.aadhaar_number || employeeData.aadhaar || null,
+          pan_number: panClean || null,
+          aadhaar_number: aadhaarClean || null,
           lic_details: employeeData.lic_details || null,
           blood_group: employeeData.blood_group || null,
           pf_number: employeeData.pf_number,

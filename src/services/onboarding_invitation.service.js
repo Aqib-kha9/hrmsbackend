@@ -191,6 +191,35 @@ class OnboardingInvitationService {
       throw new AppError('This profile is already approved and active', 400);
     }
 
+    // Early validation: Check if PAN or Aadhaar is already registered to an employee
+    const panClean = (submissionData.pan_number || submissionData.pan || '').trim().toUpperCase();
+    if (panClean) {
+      const existingPanEmp = await Employee.findOne({
+        where: { pan_number: panClean },
+        attributes: ['id', 'emp_code', 'name', 'status']
+      });
+      if (existingPanEmp) {
+        throw new AppError(
+          `An employee with PAN ${panClean} is already registered (${existingPanEmp.emp_code} - ${existingPanEmp.name}). Please verify your PAN number or contact HR.`,
+          409
+        );
+      }
+    }
+
+    const aadhaarClean = (submissionData.aadhaar_number || submissionData.aadhaar || '').trim();
+    if (aadhaarClean && aadhaarClean.length === 12) {
+      const existingAadhaarEmp = await Employee.findOne({
+        where: { aadhaar_number: aadhaarClean },
+        attributes: ['id', 'emp_code', 'name', 'status']
+      });
+      if (existingAadhaarEmp) {
+        throw new AppError(
+          `An employee with Aadhaar ending in ${aadhaarClean.slice(-4)} is already registered (${existingAadhaarEmp.emp_code} - ${existingAadhaarEmp.name}). Please contact HR if this is an error.`,
+          409
+        );
+      }
+    }
+
     // Process uploaded documents if base64 data_url is provided
     let processedDocs = [];
     if (Array.isArray(submissionData.uploaded_docs)) {
@@ -321,8 +350,8 @@ class OnboardingInvitationService {
       bank_name: overrides.bank_name || data.bank_name || null,
       bank_account_number: overrides.bank_account_number || data.bank_account_number || null,
       ifsc_code: overrides.ifsc_code || data.ifsc_code || null,
-      pan_number: overrides.pan_number || data.pan_number || null,
-      aadhaar_number: overrides.aadhaar_number || data.aadhaar_number || data.aadhaar || null,
+      pan_number: (overrides.pan_number || overrides.pan || data.pan_number || data.pan || '').trim().toUpperCase() || null,
+      aadhaar_number: (overrides.aadhaar_number || overrides.aadhaar || data.aadhaar_number || data.aadhaar || '').trim() || null,
       pf_applicable: overrides.pf_applicable !== undefined ? overrides.pf_applicable : (data.pf_applicable !== false),
       pf_ceiling: overrides.pf_ceiling !== undefined ? overrides.pf_ceiling : (data.pf_ceiling || false),
       pf_contribution_mode: overrides.pf_contribution_mode || data.pf_contribution_mode || 'shared',
