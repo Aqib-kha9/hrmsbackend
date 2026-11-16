@@ -54,6 +54,7 @@ const updateEmployeeSchema = Joi.object({
   esic_number: Joi.string().max(50).allow('', null).optional(),
   office_id: Joi.number().integer().optional(),
   company_id: Joi.number().integer().optional(),
+  is_leave_allowed: Joi.boolean().optional(),
 });
 
 const employeeQuerySchema = Joi.object({

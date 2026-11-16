@@ -84,6 +84,25 @@ class EmployeeController {
     }
   }
 
+  async toggleLeaveAccess(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { is_leave_allowed } = req.body;
+      const result = await employeeService.updateEmployee(id, {
+        is_leave_allowed: Boolean(is_leave_allowed),
+      });
+      return success(
+        res,
+        `Leave module ${result.is_leave_allowed ? 'enabled' : 'disabled'} for ${result.name}`,
+        result,
+        200
+      );
+    } catch (err) {
+      logger.error(`Toggle leave access error: ${err.message}`);
+      return next(err);
+    }
+  }
+
   // ── Salary Structure ─────────────────────────────────────────────
 
   async getEmployeeSalary(req, res, next) {

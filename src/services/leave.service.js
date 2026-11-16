@@ -258,6 +258,8 @@ class LeaveService {
   async getLeaveBalance(employeeId, targetYear = null) {
     const balance = await this._ensureAnnualBalance(employeeId, targetYear);
     const policy = await this.getLeavePolicy();
+    const emp = await Employee.findByPk(employeeId, { attributes: ['id', 'is_leave_allowed'] });
+    const isLeaveAllowed = emp ? emp.is_leave_allowed !== false : true;
 
     // Privilege / Earned Leave (PL / EL) Breakdown (strictly 12 days/year annual quota)
     const plElAllocated = 12.0;
@@ -316,6 +318,7 @@ class LeaveService {
       id: balance.id,
       employee_id: employeeId,
       year: balance.year,
+      is_leave_allowed: isLeaveAllowed,
       // Combined PL / EL breakdown
       pl_el_allocated: plElAllocated,
       pl_el_carried_forward: plElCarried,
@@ -376,6 +379,13 @@ class LeaveService {
    * 2. Monthly Limit: Max 2 paid leaves per calendar month
    */
   async applyLeave(employeeId, leaveData, isAdminOnBehalf = false) {
+    if (!isAdminOnBehalf) {
+      const emp = await Employee.findByPk(employeeId, { attributes: ['id', 'is_leave_allowed'] });
+      if (emp && emp.is_leave_allowed === false) {
+        throw new AppError('Leave requests are currently disabled for your account by administration. Please contact your HR manager.', 403);
+      }
+    }
+
     const { from_date, to_date, duration, reason, contact_during_leave, leave_type = 'pl_el' } = leaveData;
 
     const balanceData = await this.getLeaveBalance(employeeId);
@@ -834,6 +844,7 @@ class LeaveService {
         department: emp.department || '—',
         designation: emp.designation || 'Staff',
         date_of_joining: emp.date_of_joining,
+        is_leave_allowed: emp.is_leave_allowed !== false,
         total_paid_entitlement: totalPaidEntitlement,
         // Combined PL / EL
         pl_el_balance: plElBal,

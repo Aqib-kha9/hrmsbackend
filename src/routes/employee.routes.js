@@ -22,6 +22,7 @@ router.get('/:id', selfOrAdmin(), employeeController.getEmployeeById);
 router.patch('/:id', requirePermission('employees:update'), validate(updateEmployeeSchema), employeeController.updateEmployee);
 router.delete('/:id', requirePermission('employees:delete'), employeeController.deleteEmployee);
 router.patch('/:id/status', requirePermission('employees:update'), employeeController.updateEmployeeStatus);
+router.patch('/:id/leave-access', requirePermission('employees:update'), employeeController.toggleLeaveAccess);
 router.patch('/:id/role', requirePermission('role_mgmt:update'), employeeController.updateEmployeeRole);
 router.post('/:id/rehire', requirePermission('employees:create'), employeeController.rehire);
 

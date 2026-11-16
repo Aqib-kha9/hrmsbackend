@@ -285,6 +285,12 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(200),
     allowNull: true,
   },
+  is_leave_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether leave viewing and applying is enabled for this employee in the mobile app',
+  },
   is_first_login: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,

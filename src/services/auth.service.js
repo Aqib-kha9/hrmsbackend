@@ -128,6 +128,7 @@ class AuthService {
         uan: employee.uan,
         shift_start_time: employee.shift_start_time,
         shift_end_time: employee.shift_end_time,
+        is_leave_allowed: employee.is_leave_allowed !== false,
       },
     };
   }
@@ -772,6 +773,7 @@ class AuthService {
       emergency_contact_relation: employee.emergency_contact_relation,
       shift_start_time: employee.shift_start_time,
       shift_end_time: employee.shift_end_time,
+      is_leave_allowed: employee.is_leave_allowed !== false,
       // Latest salary structure
       salary_structure: latestSalary ? {
         id: latestSalary.id,
