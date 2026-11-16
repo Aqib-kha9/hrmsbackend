@@ -113,10 +113,12 @@ class RegularizationService {
     }
 
     if (query.month && query.year) {
-      const m = String(query.month).padStart(2, '0');
-      const y = String(query.year);
+      const yr = parseInt(query.year, 10);
+      const mo = parseInt(query.month, 10);
+      const lastDay = new Date(yr, mo, 0).getDate();
+      const mStr = String(mo).padStart(2, '0');
       where.date = {
-        [Op.between]: [`${y}-${m}-01`, `${y}-${m}-31`],
+        [Op.between]: [`${yr}-${mStr}-01`, `${yr}-${mStr}-${String(lastDay).padStart(2, '0')}`],
       };
     }
 
@@ -170,10 +172,12 @@ class RegularizationService {
     }
 
     if (query.month && query.year) {
-      const m = String(query.month).padStart(2, '0');
-      const y = String(query.year);
+      const yr = parseInt(query.year, 10);
+      const mo = parseInt(query.month, 10);
+      const lastDay = new Date(yr, mo, 0).getDate();
+      const mStr = String(mo).padStart(2, '0');
       where.date = {
-        [Op.between]: [`${y}-${m}-01`, `${y}-${m}-31`],
+        [Op.between]: [`${yr}-${mStr}-01`, `${yr}-${mStr}-${String(lastDay).padStart(2, '0')}`],
       };
     }
 
@@ -204,7 +208,7 @@ class RegularizationService {
           model: Employee,
           as: 'employee',
           where: Object.keys(empWhere).length > 0 ? empWhere : undefined,
-          attributes: ['id', 'name', 'emp_code', 'email', 'avatar', 'department', 'designation', 'company_id', 'office_id'],
+          attributes: ['id', 'name', 'emp_code', 'email', 'profile_image', 'department', 'designation', 'company_id', 'office_id'],
           include: [
             { model: Company, as: 'company', attributes: ['id', 'name'] },
             { model: Office, as: 'office', attributes: ['id', 'name', 'city'] },
