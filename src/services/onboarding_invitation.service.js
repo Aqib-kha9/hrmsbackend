@@ -391,14 +391,24 @@ class OnboardingInvitationService {
         try {
           const typeMapping = {
             aadhaar_card: 'id_proof',
+            aadhaar: 'id_proof',
             pan_card: 'id_proof',
+            pan: 'id_proof',
             bank_proof: 'other',
+            passbook_cheque: 'other',
             photo: 'other',
+            education_certificate: 'certificate',
             relieving_letter: 'certificate',
             appointment_letter: 'contract',
+            signed_offer_letter: 'contract',
             salary_slips: 'other',
+            salary_slip: 'other',
+            salary_slips_statement: 'other',
             bank_statements: 'other',
+            bank_statement: 'other',
+            resume: 'other',
             form_16: 'other',
+            form16: 'other',
           };
           await Document.create({
             employee_id: newEmployee.id,
