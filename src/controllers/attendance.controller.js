@@ -187,6 +187,7 @@ class AttendanceController {
       const adminId = req.employee.id;
       const {
         employeeId,
+        employeeIds,
         weekly_off_days,
         rotational_weekly_off,
         weekly_off_type,
@@ -194,9 +195,11 @@ class AttendanceController {
         shift_end_time,
         is_rotational_shift,
         half_day_late_minutes,
+        weekly_shift_schedule,
       } = req.body;
       const result = await attendanceService.updateWeeklyOffConfig(adminId, {
         employeeId,
+        employeeIds,
         weekly_off_days,
         rotational_weekly_off,
         weekly_off_type,
@@ -204,6 +207,7 @@ class AttendanceController {
         shift_end_time,
         is_rotational_shift,
         half_day_late_minutes,
+        weekly_shift_schedule,
       });
       return success(res, 'Work schedule & shift timing updated successfully', result, 200);
     } catch (err) {

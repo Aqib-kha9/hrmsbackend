@@ -306,8 +306,21 @@ class AttendanceService {
 
     // Determine status and late arrival using shift_start_time (default 10:00 AM = 600 mins)
     const localCheckInMins = getLocalMinutesFromMidnight(today);
-    const shiftStartMins = timeStringToMinutes(employee.shift_start_time, 600);
-    const shiftEndMins = timeStringToMinutes(employee.shift_end_time, 1140);
+    let effectiveShiftStart = employee.shift_start_time;
+    let effectiveShiftEnd = employee.shift_end_time;
+
+    if (employee.weekly_shift_schedule && typeof employee.weekly_shift_schedule === 'object') {
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const todayDayName = dayNames[today.getDay()];
+      const daySchedule = employee.weekly_shift_schedule[todayDayName];
+      if (daySchedule && !daySchedule.is_off) {
+        if (daySchedule.start) effectiveShiftStart = daySchedule.start;
+        if (daySchedule.end) effectiveShiftEnd = daySchedule.end;
+      }
+    }
+
+    const shiftStartMins = timeStringToMinutes(effectiveShiftStart, 600);
+    const shiftEndMins = timeStringToMinutes(effectiveShiftEnd, 1140);
 
     // Enforce allowed punch-in window (2 hours before shift start until shift end)
     const allowedStart = shiftStartMins - 120;
@@ -1162,7 +1175,7 @@ class AttendanceService {
     const employees = await Employee.findAll({
       where: empWhere,
       include: ['office', 'company'],
-      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type', 'shift_start_time', 'shift_end_time', 'is_rotational_shift', 'half_day_late_minutes'],
+      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type', 'shift_start_time', 'shift_end_time', 'is_rotational_shift', 'half_day_late_minutes', 'weekly_shift_schedule'],
     });
 
     const empIds = employees.map(e => e.id);
@@ -1499,6 +1512,7 @@ class AttendanceService {
         shift_end_time: emp.shift_end_time,
         is_rotational_shift: Boolean(emp.is_rotational_shift),
         half_day_late_minutes: emp.half_day_late_minutes || 60,
+        weekly_shift_schedule: emp.weekly_shift_schedule || null,
         grid,
         grid_details: gridDetails,
         muster_days: daysInCycle,
@@ -1718,6 +1732,7 @@ class AttendanceService {
   // Admin/HR: Configure employee weekly-off schedule (fixed or rotational) (Req 2.5 C)
   async updateWeeklyOffConfig(adminId, {
     employeeId,
+    employeeIds,
     weekly_off_days,
     rotational_weekly_off,
     weekly_off_type,
@@ -1725,19 +1740,35 @@ class AttendanceService {
     shift_end_time,
     is_rotational_shift,
     half_day_late_minutes,
+    weekly_shift_schedule,
   }) {
-    let emp = null;
-    if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
-      emp = await Employee.findByPk(employeeId);
-    }
-    if (!emp) {
-      emp = await Employee.findOne({ where: { emp_code: employeeId } });
-    }
-    if (!emp) {
-      throw new AppError(`Employee ${employeeId} not found`, 404);
-    }
-
     const updatePayload = {};
+
+    if (weekly_shift_schedule !== undefined) {
+      updatePayload.weekly_shift_schedule = weekly_shift_schedule;
+      // Auto-sync weekly_off_days from day-wise schedule if not explicitly given
+      if (weekly_shift_schedule && typeof weekly_shift_schedule === 'object' && weekly_off_days === undefined) {
+        const offDays = Object.keys(weekly_shift_schedule).filter(day => weekly_shift_schedule[day]?.is_off);
+        if (offDays.length > 0) {
+          updatePayload.weekly_off_days = offDays;
+        }
+      }
+      // If primary shift times not explicitly passed, sync from Monday or first working day
+      if (weekly_shift_schedule && typeof weekly_shift_schedule === 'object') {
+        const workingDayKey = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].find(
+          d => weekly_shift_schedule[d] && !weekly_shift_schedule[d].is_off && weekly_shift_schedule[d].start
+        );
+        if (workingDayKey) {
+          const wDay = weekly_shift_schedule[workingDayKey];
+          if (shift_start_time === undefined && wDay.start) {
+            updatePayload.shift_start_time = wDay.start.length === 5 ? `${wDay.start}:00` : wDay.start;
+          }
+          if (shift_end_time === undefined && wDay.end) {
+            updatePayload.shift_end_time = wDay.end.length === 5 ? `${wDay.end}:00` : wDay.end;
+          }
+        }
+      }
+    }
 
     if (weekly_off_days !== undefined) {
       let formattedDays = weekly_off_days;
@@ -1783,9 +1814,47 @@ class AttendanceService {
       updatePayload.half_day_late_minutes = Number(half_day_late_minutes);
     }
 
-    await emp.update(updatePayload);
-
     const todayStr = getLocalDateString(new Date());
+
+    // Bulk update support across multiple employees
+    if (employeeIds && Array.isArray(employeeIds) && employeeIds.length > 0) {
+      const updatedCodes = [];
+      for (const id of employeeIds) {
+        let targetEmp = null;
+        if (typeof id === 'number' || /^\d+$/.test(id)) {
+          targetEmp = await Employee.findByPk(id);
+        }
+        if (!targetEmp) {
+          targetEmp = await Employee.findOne({ where: { emp_code: id } });
+        }
+        if (targetEmp) {
+          await targetEmp.update(updatePayload);
+          await this._updateMonthlyAttendance(targetEmp.id, todayStr);
+          updatedCodes.push(targetEmp.emp_code);
+        }
+      }
+      logger.info(`Admin ${adminId} bulk configured work schedule for ${updatedCodes.length} employees`);
+      return {
+        bulk: true,
+        count: updatedCodes.length,
+        employee_codes: updatedCodes,
+        schedule: updatePayload,
+      };
+    }
+
+    // Single employee update
+    let emp = null;
+    if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
+      emp = await Employee.findByPk(employeeId);
+    }
+    if (!emp) {
+      emp = await Employee.findOne({ where: { emp_code: employeeId } });
+    }
+    if (!emp) {
+      throw new AppError(`Employee ${employeeId} not found`, 404);
+    }
+
+    await emp.update(updatePayload);
     await this._updateMonthlyAttendance(emp.id, todayStr);
 
     logger.info(`Admin ${adminId} configured work schedule & shift for ${emp.emp_code}: ${JSON.stringify(updatePayload)}`);
@@ -1801,6 +1870,7 @@ class AttendanceService {
       shift_end_time: emp.shift_end_time,
       is_rotational_shift: emp.is_rotational_shift,
       half_day_late_minutes: emp.half_day_late_minutes,
+      weekly_shift_schedule: emp.weekly_shift_schedule,
     };
   }
 

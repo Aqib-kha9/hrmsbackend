@@ -122,6 +122,11 @@ const Employee = sequelize.define('Employee', {
     defaultValue: ['Sunday'],
     comment: 'Configured weekly off day names, e.g. ["Sunday"], ["Monday"], etc. (Req 2.5 C)',
   },
+  weekly_shift_schedule: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    comment: 'Day-by-day weekly shift roster mapping: e.g. { Monday: { start: "09:30", end: "18:30", is_off: false, shift_name: "General" }, ... }',
+  },
   half_day_late_minutes: {
     type: DataTypes.INTEGER,
     allowNull: true,

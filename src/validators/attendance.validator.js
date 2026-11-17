@@ -93,10 +93,10 @@ const weeklyOffConfigSchema = Joi.object({
   employeeId: Joi.alternatives().try(
     Joi.string().trim(),
     Joi.number().integer().positive()
-  ).required()
-    .messages({
-      'any.required': 'Employee ID is required',
-    }),
+  ).optional(),
+  employeeIds: Joi.array().items(
+    Joi.alternatives().try(Joi.string().trim(), Joi.number().integer().positive())
+  ).optional(),
   weekly_off_days: Joi.alternatives().try(
     Joi.array().items(Joi.string().trim()).min(1),
     Joi.string().trim()
@@ -110,6 +110,7 @@ const weeklyOffConfigSchema = Joi.object({
   shift_end_time: Joi.string().allow('', null).optional(),
   is_rotational_shift: Joi.boolean().optional(),
   half_day_late_minutes: Joi.number().integer().min(0).max(480).optional(),
+  weekly_shift_schedule: Joi.object().allow(null).optional(),
 });
 
 // ── Tour management schemas ──
