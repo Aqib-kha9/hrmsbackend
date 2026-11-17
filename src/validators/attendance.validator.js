@@ -100,12 +100,16 @@ const weeklyOffConfigSchema = Joi.object({
   weekly_off_days: Joi.alternatives().try(
     Joi.array().items(Joi.string().trim()).min(1),
     Joi.string().trim()
-  ).required()
+  ).optional()
     .messages({
       'any.required': 'Weekly off days selection is required',
     }),
   rotational_weekly_off: Joi.boolean().optional(),
   weekly_off_type: Joi.string().valid('fixed', 'rotational').optional(),
+  shift_start_time: Joi.string().allow('', null).optional(),
+  shift_end_time: Joi.string().allow('', null).optional(),
+  is_rotational_shift: Joi.boolean().optional(),
+  half_day_late_minutes: Joi.number().integer().min(0).max(480).optional(),
 });
 
 // ── Tour management schemas ──

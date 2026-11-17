@@ -185,16 +185,29 @@ class AttendanceController {
   async updateWeeklyOffConfig(req, res, next) {
     try {
       const adminId = req.employee.id;
-      const { employeeId, weekly_off_days, rotational_weekly_off, weekly_off_type } = req.body;
+      const {
+        employeeId,
+        weekly_off_days,
+        rotational_weekly_off,
+        weekly_off_type,
+        shift_start_time,
+        shift_end_time,
+        is_rotational_shift,
+        half_day_late_minutes,
+      } = req.body;
       const result = await attendanceService.updateWeeklyOffConfig(adminId, {
         employeeId,
         weekly_off_days,
         rotational_weekly_off,
         weekly_off_type,
+        shift_start_time,
+        shift_end_time,
+        is_rotational_shift,
+        half_day_late_minutes,
       });
-      return success(res, 'Weekly off schedule updated successfully', result, 200);
+      return success(res, 'Work schedule & shift timing updated successfully', result, 200);
     } catch (err) {
-      logger.error(`Update weekly off config error: ${err.message}`);
+      logger.error(`Update weekly off & shift config error: ${err.message}`);
       return next(err);
     }
   }

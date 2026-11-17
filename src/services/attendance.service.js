@@ -1162,7 +1162,7 @@ class AttendanceService {
     const employees = await Employee.findAll({
       where: empWhere,
       include: ['office', 'company'],
-      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type', 'shift_start_time', 'shift_end_time'],
+      attributes: ['id', 'emp_code', 'name', 'designation', 'fixed_gross', 'department', 'weekly_off_days', 'rotational_weekly_off', 'weekly_off_type', 'shift_start_time', 'shift_end_time', 'is_rotational_shift', 'half_day_late_minutes'],
     });
 
     const empIds = employees.map(e => e.id);
@@ -1497,6 +1497,8 @@ class AttendanceService {
         weekly_off_type: emp.weekly_off_type || 'fixed',
         shift_start_time: emp.shift_start_time,
         shift_end_time: emp.shift_end_time,
+        is_rotational_shift: Boolean(emp.is_rotational_shift),
+        half_day_late_minutes: emp.half_day_late_minutes || 60,
         grid,
         grid_details: gridDetails,
         muster_days: daysInCycle,
@@ -1714,7 +1716,16 @@ class AttendanceService {
   }
 
   // Admin/HR: Configure employee weekly-off schedule (fixed or rotational) (Req 2.5 C)
-  async updateWeeklyOffConfig(adminId, { employeeId, weekly_off_days, rotational_weekly_off, weekly_off_type }) {
+  async updateWeeklyOffConfig(adminId, {
+    employeeId,
+    weekly_off_days,
+    rotational_weekly_off,
+    weekly_off_type,
+    shift_start_time,
+    shift_end_time,
+    is_rotational_shift,
+    half_day_late_minutes,
+  }) {
     let emp = null;
     if (typeof employeeId === 'number' || /^\d+$/.test(employeeId)) {
       emp = await Employee.findByPk(employeeId);
@@ -1726,41 +1737,70 @@ class AttendanceService {
       throw new AppError(`Employee ${employeeId} not found`, 404);
     }
 
-    let formattedDays = weekly_off_days;
-    if (typeof formattedDays === 'string') {
-      try {
-        formattedDays = JSON.parse(formattedDays);
-      } catch (e) {
-        formattedDays = formattedDays.split(',').map(s => s.trim());
+    const updatePayload = {};
+
+    if (weekly_off_days !== undefined) {
+      let formattedDays = weekly_off_days;
+      if (typeof formattedDays === 'string') {
+        try {
+          formattedDays = JSON.parse(formattedDays);
+        } catch (e) {
+          formattedDays = formattedDays.split(',').map(s => s.trim());
+        }
       }
-    }
-    if (!Array.isArray(formattedDays)) {
-      formattedDays = [formattedDays];
+      if (!Array.isArray(formattedDays)) {
+        formattedDays = [formattedDays];
+      }
+      updatePayload.weekly_off_days = formattedDays;
     }
 
-    const isRotational = rotational_weekly_off !== undefined
-      ? Boolean(rotational_weekly_off)
-      : (weekly_off_type === 'rotational');
-    const offType = weekly_off_type || (isRotational ? 'rotational' : 'fixed');
+    if (rotational_weekly_off !== undefined) {
+      const isRotational = Boolean(rotational_weekly_off);
+      updatePayload.rotational_weekly_off = isRotational;
+      updatePayload.weekly_off_type = isRotational ? 'rotational' : 'fixed';
+    } else if (weekly_off_type !== undefined) {
+      updatePayload.weekly_off_type = weekly_off_type;
+      updatePayload.rotational_weekly_off = weekly_off_type === 'rotational';
+    }
 
-    await emp.update({
-      weekly_off_days: formattedDays,
-      rotational_weekly_off: isRotational,
-      weekly_off_type: offType,
-    });
+    if (shift_start_time !== undefined) {
+      updatePayload.shift_start_time = shift_start_time
+        ? (shift_start_time.length === 5 ? `${shift_start_time}:00` : shift_start_time)
+        : null;
+    }
+
+    if (shift_end_time !== undefined) {
+      updatePayload.shift_end_time = shift_end_time
+        ? (shift_end_time.length === 5 ? `${shift_end_time}:00` : shift_end_time)
+        : null;
+    }
+
+    if (is_rotational_shift !== undefined) {
+      updatePayload.is_rotational_shift = Boolean(is_rotational_shift);
+    }
+
+    if (half_day_late_minutes !== undefined) {
+      updatePayload.half_day_late_minutes = Number(half_day_late_minutes);
+    }
+
+    await emp.update(updatePayload);
 
     const todayStr = getLocalDateString(new Date());
     await this._updateMonthlyAttendance(emp.id, todayStr);
 
-    logger.info(`Admin ${adminId} configured weekly off for ${emp.emp_code}: ${JSON.stringify(formattedDays)} (${offType})`);
+    logger.info(`Admin ${adminId} configured work schedule & shift for ${emp.emp_code}: ${JSON.stringify(updatePayload)}`);
 
     return {
       employee_id: emp.id,
       emp_code: emp.emp_code,
       name: emp.name,
-      weekly_off_days: formattedDays,
-      rotational_weekly_off: isRotational,
-      weekly_off_type: offType,
+      weekly_off_days: emp.weekly_off_days,
+      rotational_weekly_off: emp.rotational_weekly_off,
+      weekly_off_type: emp.weekly_off_type,
+      shift_start_time: emp.shift_start_time,
+      shift_end_time: emp.shift_end_time,
+      is_rotational_shift: emp.is_rotational_shift,
+      half_day_late_minutes: emp.half_day_late_minutes,
     };
   }
 
