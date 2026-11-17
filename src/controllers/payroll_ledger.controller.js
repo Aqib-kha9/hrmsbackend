@@ -101,8 +101,8 @@ class PayrollLedgerController {
   async getEmployeeHistory(req, res, next) {
     try {
       const { employeeId } = req.params;
-      const { year, days, from, to } = req.query;
-      const result = await payrollLedgerService.getEmployeeHistory(employeeId, { year, days, from, to });
+      const { year, month, cycle_type, days, from, to } = req.query;
+      const result = await payrollLedgerService.getEmployeeHistory(employeeId, { year, month, cycle_type, days, from, to });
       return success(res, 'Employee payroll history fetched', result, 200);
     } catch (err) {
       logger.error(`[PayrollLedger] getEmployeeHistory error: ${err.message}`);

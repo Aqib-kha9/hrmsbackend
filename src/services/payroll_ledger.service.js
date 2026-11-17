@@ -809,7 +809,7 @@ class PayrollLedgerService {
     return resolved;
   }
 
-  async getEmployeeHistory(employeeId, { year, days, from, to } = {}) {
+  async getEmployeeHistory(employeeId, { year, month, cycle_type, days, from, to } = {}) {
     const emp = await Employee.findByPk(employeeId, {
       include: [
         { model: Office, as: 'office' },
@@ -832,11 +832,34 @@ class PayrollLedgerService {
     const fixedPerf = Number(emp.performance_allowance) || 0;
     const fixedOther = Math.max(0, fixedGross - (fixedBasic + fixedHra + fixedConv + fixedMed + fixedSpec + fixedPerf));
 
-    // ── Determine Date Range (previous X days or custom from/to) ──
+    // ── Determine Date Range (Month-wise, Previous X days, or Custom from/to) ──
     let startDate, endDate;
     if (from && to) {
       startDate = new Date(from);
       endDate = new Date(to);
+    } else if (month) {
+      const monthNames = [
+        'january', 'february', 'march', 'april', 'may', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december'
+      ];
+      let mIdx;
+      if (typeof month === 'string' && isNaN(Number(month))) {
+        mIdx = monthNames.indexOf(month.toLowerCase().trim());
+        if (mIdx === -1) mIdx = new Date().getMonth();
+      } else {
+        mIdx = parseInt(month) - 1;
+      }
+      const y = year ? parseInt(year) : new Date().getFullYear();
+
+      if (cycle_type === 'payroll_cycle') {
+        // Payroll cycle: 26th of previous month to 25th of current month
+        startDate = new Date(y, mIdx - 1, 26);
+        endDate = new Date(y, mIdx, 25);
+      } else {
+        // Calendar month: 1st to last day of current month
+        startDate = new Date(y, mIdx, 1);
+        endDate = new Date(y, mIdx + 1, 0);
+      }
     } else {
       const numDays = parseInt(days) || 30;
       endDate = new Date();
@@ -1026,6 +1049,59 @@ class PayrollLedgerService {
 
     const historyList = history.filter(Boolean);
 
+    // ── Month-Wise Aggregations Breakdown ──
+    const monthlyMap = {};
+    timeline.forEach(t => {
+      const ym = t.date.substring(0, 7); // "YYYY-MM"
+      if (!monthlyMap[ym]) {
+        const dObj = new Date(t.date + 'T00:00:00');
+        const mName = dObj.toLocaleString('en-US', { month: 'short' });
+        const mFull = dObj.toLocaleString('en-US', { month: 'long' });
+        const yVal = dObj.getFullYear();
+        monthlyMap[ym] = {
+          monthKey: ym,
+          monthName: mName,
+          monthFull: mFull,
+          year: yVal,
+          label: `${mName} ${yVal}`,
+          totalDays: 0,
+          payableDays: 0,
+          presentDays: 0,
+          halfDays: 0,
+          weeklyOffDays: 0,
+          absentDays: 0,
+          holidayDays: 0,
+          totalHours: 0,
+          grossEarned: 0,
+        };
+      }
+      const mItem = monthlyMap[ym];
+      mItem.totalDays++;
+      mItem.payableDays += t.payableCredit;
+      if (t.status === 'present' || t.status === 'late' || t.status === 'tour') mItem.presentDays++;
+      else if (t.status === 'half_day') mItem.halfDays++;
+      else if (t.status === 'weekend') mItem.weeklyOffDays++;
+      else if (t.status === 'holiday') mItem.holidayDays++;
+      else if (t.status === 'absent') mItem.absentDays++;
+      mItem.totalHours += (t.totalHours || 0);
+    });
+
+    const monthlyBreakdown = Object.values(monthlyMap).map(mItem => {
+      mItem.payableDays = Number(mItem.payableDays.toFixed(1));
+      mItem.totalHours = Number(mItem.totalHours.toFixed(2));
+      mItem.grossEarned = Math.round(mItem.payableDays * dailyRate);
+      const matched = historyList.find(h => 
+        h.year === mItem.year && (h.month?.toLowerCase().includes(mItem.monthName.toLowerCase()) || h.month_index === (new Date(mItem.monthKey + '-01T00:00:00').getMonth()))
+      );
+      if (matched) {
+        mItem.cycleId = matched.id;
+        mItem.status = matched.status;
+        mItem.net = matched.net;
+        mItem.grossDeductions = matched.grossDeductions;
+      }
+      return mItem;
+    }).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+
     return {
       employee: {
         id: emp.id,
@@ -1082,6 +1158,7 @@ class PayrollLedgerService {
         dailyRate,
         hourlyRate,
         periodGrossEarned,
+        monthlyBreakdown,
         timeline: timeline.slice().reverse()
       },
       history: historyList
