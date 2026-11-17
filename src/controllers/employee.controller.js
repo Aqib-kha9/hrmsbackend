@@ -88,8 +88,14 @@ class EmployeeController {
     try {
       const { id } = req.params;
       const { is_leave_allowed } = req.body;
+      const allowed = Boolean(is_leave_allowed);
+      const employee = await employeeService.getEmployeeById(id);
+      const currentModules = employee.app_modules || {};
+      const updatedModules = { ...currentModules, leave: allowed };
+
       const result = await employeeService.updateEmployee(id, {
-        is_leave_allowed: Boolean(is_leave_allowed),
+        is_leave_allowed: allowed,
+        app_modules: updatedModules,
       });
       return success(
         res,
@@ -99,6 +105,64 @@ class EmployeeController {
       );
     } catch (err) {
       logger.error(`Toggle leave access error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async updateAppModules(req, res, next) {
+    try {
+      const { id } = req.params;
+      const {
+        is_attendance_allowed,
+        is_leave_allowed,
+        is_payroll_allowed,
+        is_loans_allowed,
+        is_documents_allowed,
+        is_letters_allowed,
+        app_modules,
+      } = req.body;
+
+      const employee = await employeeService.getEmployeeById(id);
+      const currentModules = employee.app_modules || {
+        attendance: employee.is_attendance_allowed !== false,
+        leave: employee.is_leave_allowed !== false,
+        payroll: employee.is_payroll_allowed !== false,
+        loans: employee.is_loans_allowed !== false,
+        documents: employee.is_documents_allowed !== false,
+        letters: employee.is_letters_allowed !== false,
+      };
+
+      const updatedModules = {
+        ...currentModules,
+        ...(app_modules || {}),
+      };
+
+      if (is_attendance_allowed !== undefined) updatedModules.attendance = Boolean(is_attendance_allowed);
+      if (is_leave_allowed !== undefined) updatedModules.leave = Boolean(is_leave_allowed);
+      if (is_payroll_allowed !== undefined) updatedModules.payroll = Boolean(is_payroll_allowed);
+      if (is_loans_allowed !== undefined) updatedModules.loans = Boolean(is_loans_allowed);
+      if (is_documents_allowed !== undefined) updatedModules.documents = Boolean(is_documents_allowed);
+      if (is_letters_allowed !== undefined) updatedModules.letters = Boolean(is_letters_allowed);
+
+      const updatePayload = {
+        is_attendance_allowed: updatedModules.attendance !== false,
+        is_leave_allowed: updatedModules.leave !== false,
+        is_payroll_allowed: updatedModules.payroll !== false,
+        is_loans_allowed: updatedModules.loans !== false,
+        is_documents_allowed: updatedModules.documents !== false,
+        is_letters_allowed: updatedModules.letters !== false,
+        app_modules: updatedModules,
+      };
+
+      const result = await employeeService.updateEmployee(id, updatePayload);
+      return success(
+        res,
+        `Mobile app module permissions successfully updated for ${result.name}`,
+        result,
+        200
+      );
+    } catch (err) {
+      logger.error(`Update app modules error: ${err.message}`);
       return next(err);
     }
   }

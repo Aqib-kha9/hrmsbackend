@@ -285,11 +285,47 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING(200),
     allowNull: true,
   },
+  is_attendance_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether attendance punch and history is enabled for this employee in the mobile app',
+  },
   is_leave_allowed: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: true,
     comment: 'Whether leave viewing and applying is enabled for this employee in the mobile app',
+  },
+  is_payroll_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether payroll and salary slips are enabled for this employee in the mobile app',
+  },
+  is_loans_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether loans and advances module is enabled for this employee in the mobile app',
+  },
+  is_documents_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether documents access is enabled for this employee in the mobile app',
+  },
+  is_letters_allowed: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+    comment: 'Whether letters access is enabled for this employee in the mobile app',
+  },
+  app_modules: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null,
+    comment: 'JSON map of custom module permissions { attendance: true, leave: false, ... }',
   },
   is_first_login: {
     type: DataTypes.BOOLEAN,

@@ -54,7 +54,13 @@ const updateEmployeeSchema = Joi.object({
   esic_number: Joi.string().max(50).allow('', null).optional(),
   office_id: Joi.number().integer().optional(),
   company_id: Joi.number().integer().optional(),
+  is_attendance_allowed: Joi.boolean().optional(),
   is_leave_allowed: Joi.boolean().optional(),
+  is_payroll_allowed: Joi.boolean().optional(),
+  is_loans_allowed: Joi.boolean().optional(),
+  is_documents_allowed: Joi.boolean().optional(),
+  is_letters_allowed: Joi.boolean().optional(),
+  app_modules: Joi.object().optional().allow(null),
   profile_image: Joi.string().allow('', null).optional(),
 });
 

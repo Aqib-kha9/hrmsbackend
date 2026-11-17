@@ -128,7 +128,20 @@ class AuthService {
         uan: employee.uan,
         shift_start_time: employee.shift_start_time,
         shift_end_time: employee.shift_end_time,
+        is_attendance_allowed: employee.is_attendance_allowed !== false,
         is_leave_allowed: employee.is_leave_allowed !== false,
+        is_payroll_allowed: employee.is_payroll_allowed !== false,
+        is_loans_allowed: employee.is_loans_allowed !== false,
+        is_documents_allowed: employee.is_documents_allowed !== false,
+        is_letters_allowed: employee.is_letters_allowed !== false,
+        app_modules: employee.app_modules || {
+          attendance: employee.is_attendance_allowed !== false,
+          leave: employee.is_leave_allowed !== false,
+          payroll: employee.is_payroll_allowed !== false,
+          loans: employee.is_loans_allowed !== false,
+          documents: employee.is_documents_allowed !== false,
+          letters: employee.is_letters_allowed !== false,
+        },
       },
     };
   }
@@ -773,7 +786,20 @@ class AuthService {
       emergency_contact_relation: employee.emergency_contact_relation,
       shift_start_time: employee.shift_start_time,
       shift_end_time: employee.shift_end_time,
+      is_attendance_allowed: employee.is_attendance_allowed !== false,
       is_leave_allowed: employee.is_leave_allowed !== false,
+      is_payroll_allowed: employee.is_payroll_allowed !== false,
+      is_loans_allowed: employee.is_loans_allowed !== false,
+      is_documents_allowed: employee.is_documents_allowed !== false,
+      is_letters_allowed: employee.is_letters_allowed !== false,
+      app_modules: employee.app_modules || {
+        attendance: employee.is_attendance_allowed !== false,
+        leave: employee.is_leave_allowed !== false,
+        payroll: employee.is_payroll_allowed !== false,
+        loans: employee.is_loans_allowed !== false,
+        documents: employee.is_documents_allowed !== false,
+        letters: employee.is_letters_allowed !== false,
+      },
       // Latest salary structure
       salary_structure: latestSalary ? {
         id: latestSalary.id,

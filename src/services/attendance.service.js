@@ -241,6 +241,12 @@ class AttendanceService {
     if (!employee) {
       throw new AppError('Employee profile not found', 400);
     }
+    if (employee.is_attendance_allowed === false) {
+      throw new AppError('Attendance recording is currently disabled for your account by administration. Please contact your HR manager.', 403);
+    }
+    if (employee.is_attendance_allowed === false) {
+      throw new AppError('Attendance recording is currently disabled for your account by administration. Please contact your HR manager.', 403);
+    }
 
     const isOutdoor = Boolean(
       outdoorData.is_outdoor ||
@@ -412,6 +418,9 @@ class AttendanceService {
     const employee = await Employee.findByPk(employeeId, { include: ['office'] });
     if (!employee) {
       throw new AppError('Employee profile not found', 400);
+    }
+    if (employee.is_attendance_allowed === false) {
+      throw new AppError('Attendance recording is currently disabled for your account by administration. Please contact your HR manager.', 403);
     }
 
     const isOutdoor = Boolean(

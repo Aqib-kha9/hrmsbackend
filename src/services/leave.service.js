@@ -1191,21 +1191,14 @@ class LeaveService {
         raw: true,
       });
 
-      const dbDepartments = results.map((r) => r.department).filter(Boolean);
-      const defaultDepartments = [
-        'Administration',
-        'Engineering',
-        'Finance',
-        'Human Resources',
-        'Marketing',
-        'Operations',
-        'Sales',
-      ];
-      const merged = Array.from(new Set([...defaultDepartments, ...dbDepartments])).sort();
-      return merged;
+      const dbDepartments = results
+        .map((r) => (r.department || '').trim())
+        .filter((d) => d.length > 0);
+      const unique = Array.from(new Set(dbDepartments)).sort();
+      return unique;
     } catch (err) {
       logger.error('Failed to get departments in leave service:', err);
-      return ['Administration', 'Human Resources', 'Operations', 'Sales', 'Marketing', 'Finance'];
+      return [];
     }
   }
 }

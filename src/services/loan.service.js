@@ -79,6 +79,13 @@ class LoanService {
   }
 
   async applyLoan(employeeId, loanData, approvedBy = null) {
+    if (!approvedBy) {
+      const emp = await Employee.findByPk(employeeId, { attributes: ['id', 'is_loans_allowed'] });
+      if (emp && emp.is_loans_allowed === false) {
+        throw new AppError('Loan applications are currently disabled for your account by administration. Please contact your HR manager.', 403);
+      }
+    }
+
     const { type, principal_amount, interest_rate, tenure_months, reason } = loanData;
 
     if (principal_amount > 50000) {
