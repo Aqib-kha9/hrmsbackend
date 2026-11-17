@@ -28,6 +28,7 @@ router.delete('/:id', requirePermission('letters:delete'), letterController.dele
 // ── Generate PDF & send email (Admin/HR) ──
 router.get('/generate-pdf', requirePermission('letters:read'), letterController.generateLetterPDF);
 router.post('/generate-pdf', requirePermission('letters:create'), letterController.generateLetterPDF);
+router.get('/:id/pdf', requirePermission('letters:read'), letterController.downloadLetterByIdPDF);
 router.post('/send-email', requirePermission('letters:create'), letterController.sendLetterEmail);
 router.post('/:id/send-email', requirePermission('letters:create'), letterController.sendExistingLetterEmail);
 router.post('/:id/send-onboarding-invite', requirePermission('letters:create'), letterController.sendOnboardingInvite);

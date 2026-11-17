@@ -531,6 +531,8 @@ class LetterController {
         title: letter.title,
         type: letter.type,
         signatory: letter.signatory,
+        metadata: meta,
+        letterDate: letter.issued_date,
       });
 
       // Send official email with attachment
@@ -793,6 +795,8 @@ class LetterController {
         title: letter.title,
         type: letter.type,
         signatory: letter.signatory,
+        metadata: meta,
+        letterDate: letter.issued_date,
       });
 
       const filename = `${letter.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
@@ -801,6 +805,69 @@ class LetterController {
       return res.send(pdfBuffer);
     } catch (err) {
       logger.error(`Download public offer letter PDF error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  /**
+   * Admin/HR: Download official PDF for any issued letter by ID (consistent executive layout)
+   */
+  async downloadLetterByIdPDF(req, res, next) {
+    try {
+      const { id } = req.params;
+      const letter = await Letter.findByPk(id, {
+        include: [
+          {
+            model: Employee,
+            as: 'issuedTo',
+            include: [
+              { model: Office, as: 'office' },
+              { model: Company, as: 'company' },
+            ],
+          },
+          {
+            model: AuthorisedSignatory,
+            as: 'signatory',
+          },
+        ],
+      });
+
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Letter record not found' });
+      }
+
+      const meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+      const candidateInfo = meta.candidate_details || {};
+
+      const employeeObj = letter.issuedTo || {
+        name: letter.candidate_name || candidateInfo.name || 'Candidate',
+        emp_code: 'NEW',
+        email: letter.candidate_email || candidateInfo.email || '',
+        phone: letter.candidate_phone || candidateInfo.phone || '',
+        designation: candidateInfo.designation || 'Specialist',
+        department: candidateInfo.department || 'Operations',
+        company: { name: candidateInfo.company || 'BP Marketing' },
+        office: { name: candidateInfo.office || 'Head Office', address: '' },
+      };
+
+      const pdfBuffer = await letterPdfService.generateLetterPDF({
+        content: letter.content || '',
+        employee: employeeObj,
+        title: letter.title,
+        type: letter.type,
+        signatory: letter.signatory,
+        metadata: meta,
+        letterDate: letter.issued_date,
+      });
+
+      const recipientCode = letter.issuedTo?.emp_code || (letter.candidate_name ? letter.candidate_name.replace(/\s+/g, '_') : 'recipient');
+      const filename = `${letter.type || 'letter'}-${recipientCode}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(pdfBuffer);
+    } catch (err) {
+      logger.error(`Download letter by ID PDF error: ${err.message}`);
       return next(err);
     }
   }

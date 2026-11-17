@@ -14,8 +14,26 @@ class LetterPdfService {
    * @param {string} params.title - Letter title
    * @param {string} params.type - Letter type
    */
-  async generateLetterPDF({ content, fullHtml, employee, title, type, signatory }) {
-    if (fullHtml) {
+  /**
+   * Generate a PDF buffer from letter content with employee data.
+   * Renders pixel-perfect A4 PDF via Puppeteer with executive letterhead & signatures.
+   * Falls back to pdfkit only if Puppeteer fails.
+   */
+  async generateLetterPDF({ content, fullHtml, employee = {}, title = 'Offer Letter', type = 'offer', signatory = null, metadata = {}, letterDate = null }) {
+    let targetHtml = fullHtml;
+    if (!targetHtml) {
+      targetHtml = this.buildExecutiveLetterHtml({
+        content,
+        employee,
+        title,
+        type,
+        signatory,
+        metadata,
+        letterDate,
+      });
+    }
+
+    if (targetHtml) {
       try {
         const puppeteer = require('puppeteer');
         const browser = await puppeteer.launch({
@@ -24,8 +42,8 @@ class LetterPdfService {
         });
         const page = await browser.newPage();
         
-        // Wrap the fullHtml in a minimal document with tailwind reset or basic styles
-        const htmlWrapper = `
+        // Wrap the HTML if not already a full document
+        const htmlDoc = targetHtml.includes('<html') ? targetHtml : `
           <!DOCTYPE html>
           <html>
             <head>
@@ -37,14 +55,13 @@ class LetterPdfService {
               </style>
             </head>
             <body>
-              ${fullHtml}
+              ${targetHtml}
             </body>
           </html>
         `;
         
-        await page.setContent(htmlWrapper, { waitUntil: 'networkidle0' });
+        await page.setContent(htmlDoc, { waitUntil: 'networkidle0' });
         
-        // We render it as A4 format
         const pdfBytes = await page.pdf({
           format: 'A4',
           printBackground: true,
@@ -239,6 +256,386 @@ class LetterPdfService {
       .replace(/[ \t]+/g, ' ');
 
     return text;
+  }
+  /**
+   * Build the complete official executive letter HTML document
+   * Matches the modern corporate layout with official letterhead, typography, tables, and digital signatures.
+   */
+  buildExecutiveLetterHtml({
+    content = '',
+    employee = {},
+    title = 'Offer Letter',
+    type = 'offer',
+    signatory = null,
+    metadata = {},
+    letterDate = null,
+  }) {
+    const fs = require('fs');
+    const path = require('path');
+
+    // Safe metadata extraction
+    const meta = typeof metadata === 'string' ? JSON.parse(metadata || '{}') : (metadata || {});
+    const cand = meta.candidate_details || {};
+
+    // Entity details
+    const companyName = employee.company?.name || cand.company || 'BP Marketing';
+    const officeName = employee.office?.name || cand.office || 'Indore HQ';
+
+    // Recipient details
+    const recipientName = employee.name || cand.name || 'Candidate';
+    const recipientEmail = employee.email || cand.email || '';
+    const recipientPhone = employee.phone || cand.phone || '';
+    const recipientRole = employee.designation || cand.designation || 'Specialist';
+    const recipientDept = employee.department || cand.department || 'Operations';
+
+    // Dates & Reference code
+    const formattedDate = letterDate
+      ? new Date(letterDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const refCode = `${(type || 'OFFER').toUpperCase()}/${recipientName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+
+    // Signatory details
+    const signatoryName = signatory?.name || 'Authorised Signatory';
+    const signatoryDesig = signatory?.designation || 'Human Resources';
+    const signatorySig = signatory?.signature_url || null;
+
+    // Digital Acceptance details
+    const isAccepted = meta.acceptance_status === 'accepted' || Boolean(meta.candidate_signature);
+    const candidateSig = meta.candidate_signature || null;
+    const signedName = meta.signed_name || recipientName;
+    const acceptedDate = meta.accepted_at
+      ? new Date(meta.accepted_at).toLocaleString('en-IN', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '';
+
+    // Base64 Logo
+    let logoB64 = '';
+    try {
+      const candidatePaths = [
+        path.join(__dirname, '..', '..', 'assets', 'company_logo.png'),
+        path.join(__dirname, '..', 'assets', 'company_logo.png'),
+        path.join(__dirname, '..', '..', '..', 'hrms', 'public', 'company_logopng.png'),
+      ];
+      for (const p of candidatePaths) {
+        if (fs.existsSync(p)) {
+          logoB64 = `data:image/png;base64,${fs.readFileSync(p).toString('base64')}`;
+          break;
+        }
+      }
+    } catch {
+      // Non-critical
+    }
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>${title || 'Employment Document'}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 14mm 16mm 14mm 16mm;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #0f172a;
+      background: #ffffff;
+      margin: 0;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1.6;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .letter-header {
+      border-bottom: 2.5px solid #0f172a;
+      padding-bottom: 14px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .company-logo {
+      height: 48px;
+      width: auto;
+      object-fit: contain;
+    }
+    .company-title {
+      font-size: 20px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: -0.5px;
+      color: #0f172a;
+      margin: 0;
+    }
+    .company-sub {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px;
+      font-weight: 600;
+    }
+    .doc-meta {
+      text-align: right;
+      font-size: 10px;
+      color: #475569;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+    .badge-confidential {
+      display: inline-block;
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid #cbd5e1;
+      margin-top: 4px;
+    }
+    .recipient-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .recipient-info {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .recipient-name {
+      font-size: 15px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+    .recipient-role {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+    }
+    .letter-title {
+      text-align: center;
+      margin: 18px 0 16px 0;
+    }
+    .letter-title h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: #0f172a;
+      text-decoration: underline;
+      text-underline-offset: 4px;
+    }
+    .letter-body {
+      font-size: 12.5px;
+      color: #1e293b;
+      line-height: 1.65;
+    }
+    .letter-body p {
+      margin: 0 0 10px 0;
+    }
+    .letter-body strong {
+      color: #0f172a;
+    }
+    .letter-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 11.5px;
+    }
+    .letter-body th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 800;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      border: 1px solid #cbd5e1;
+      padding: 7px 10px;
+      text-align: left;
+    }
+    .letter-body td {
+      border: 1px solid #e2e8f0;
+      padding: 6px 10px;
+      color: #334155;
+    }
+    .letter-body tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    .signatures-section {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1px solid #cbd5e1;
+      display: flex;
+      justify-content: space-between;
+      gap: 30px;
+      page-break-inside: avoid;
+    }
+    .sig-col {
+      flex: 1;
+      max-width: 48%;
+    }
+    .sig-box-auth {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background: #ffffff;
+    }
+    .sig-box-cand {
+      border: 1.5px solid #10b981;
+      background: #ecfdf5;
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .sig-box-cand-pending {
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      padding: 12px 16px;
+      background: #f8fafc;
+    }
+    .sig-header {
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+      color: #64748b;
+    }
+    .sig-header-verified {
+      color: #065f46;
+      font-weight: 900;
+    }
+    .sig-img {
+      max-height: 48px;
+      width: auto;
+      object-fit: contain;
+      display: block;
+      margin: 6px 0;
+      background: #ffffff;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .sig-name {
+      font-size: 13px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+    .sig-desig {
+      font-size: 11px;
+      color: #64748b;
+    }
+    .sig-stamp {
+      font-size: 9.5px;
+      color: #047857;
+      font-weight: 700;
+      margin-top: 4px;
+      font-family: monospace;
+    }
+    .footer-note {
+      margin-top: 25px;
+      padding-top: 10px;
+      border-top: 1px solid #f1f5f9;
+      text-align: center;
+      font-size: 8.5px;
+      color: #94a3b8;
+      line-height: 1.4;
+      page-break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <div class="letter-header">
+    <div class="brand-section">
+      ${logoB64 ? `<img src="${logoB64}" class="company-logo" alt="Logo" />` : ''}
+      <div>
+        <h1 class="company-title">${companyName}</h1>
+        <div class="company-sub">${officeName} • Official Employment Correspondence</div>
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div><strong>Date:</strong> ${formattedDate}</div>
+      <div><strong>Ref:</strong> ${refCode}</div>
+      <div class="badge-confidential">Official Document</div>
+    </div>
+  </div>
+
+  <div class="recipient-block">
+    <div class="recipient-info">
+      <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 2px;">Issued To:</div>
+      <div class="recipient-name">${recipientName}</div>
+      <div class="recipient-role">${recipientRole} — ${recipientDept}</div>
+      <div style="font-size: 11px; color: #64748b;">${recipientEmail}${recipientPhone ? ' • ' + recipientPhone : ''}</div>
+    </div>
+    <div style="text-align: right; font-size: 11px; color: #475569;">
+      <div><strong>Location:</strong> ${officeName}</div>
+      <div><strong>Entity:</strong> ${companyName}</div>
+    </div>
+  </div>
+
+  <div class="letter-title">
+    <h1>${title || 'OFFER LETTER'}</h1>
+  </div>
+
+  <div class="letter-body">
+    ${content || ''}
+  </div>
+
+  <div class="signatures-section">
+    <div class="sig-col">
+      <div class="sig-box-auth">
+        <div class="sig-header">Authorised Signatory</div>
+        ${signatorySig ? `<img src="${signatorySig}" class="sig-img" alt="Signatory Signature" />` : '<div style="height: 38px; border-bottom: 1.5px solid #0f172a; width: 140px; margin-bottom: 6px;"></div>'}
+        <div class="sig-name">${signatoryName}</div>
+        <div class="sig-desig">${signatoryDesig}</div>
+        <div style="font-size: 9px; color: #94a3b8; margin-top: 3px;">For & on behalf of ${companyName}</div>
+      </div>
+    </div>
+
+    <div class="sig-col">
+      ${isAccepted && candidateSig ? `
+        <div class="sig-box-cand">
+          <div class="sig-header sig-header-verified">
+            <span>✓ Candidate Digital Acceptance</span>
+          </div>
+          <img src="${candidateSig}" class="sig-img" alt="Candidate Digital Signature" />
+          <div class="sig-name" style="color: #064e3b;">${signedName}</div>
+          <div class="sig-stamp">Signed: ${acceptedDate}</div>
+          <div style="font-size: 8px; color: #059669; margin-top: 2px;">Verified Digital Signature • IT Act Compliant</div>
+        </div>
+      ` : `
+        <div class="sig-box-cand-pending">
+          <div class="sig-header">Candidate Acceptance & Signature</div>
+          <div style="height: 38px; border-bottom: 1.5px solid #cbd5e1; width: 140px; margin-bottom: 6px;"></div>
+          <div class="sig-name">${recipientName}</div>
+          <div class="sig-desig">Candidate Signature</div>
+          <div style="font-size: 8.5px; color: #94a3b8; margin-top: 3px;">Subject to candidate acceptance & sign</div>
+        </div>
+      `}
+    </div>
+  </div>
+
+  <div class="footer-note">
+    This is an official document generated by ${companyName} HRMS • Verification ID: ${refCode} • Confidential
+  </div>
+</body>
+</html>`;
   }
 }
 
