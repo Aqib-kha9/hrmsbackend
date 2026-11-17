@@ -10,6 +10,7 @@ router.use(authenticate);
 
 // ── Read endpoints (any authenticated user can access) ──
 router.get('/stats', officeController.getOfficeStats);
+router.get('/generate-code', officeController.generateOfficeCode);
 router.get('/', validate(officeQuerySchema, 'query'), officeController.getOffices);
 router.get('/:id', officeController.getOfficeById);
 

@@ -39,6 +39,24 @@ class OfficeController {
   }
 
   /**
+   * GET /api/v1/offices/generate-code
+   * Suggest next company-specific unique location code based on company & city.
+   */
+  async generateOfficeCode(req, res, next) {
+    try {
+      const { company_id, city, name } = req.query;
+      const code = await officeService.generateOfficeCode({
+        company_id: company_id ? parseInt(company_id, 10) : undefined,
+        city,
+        name,
+      });
+      return success(res, 'Location code generated successfully', { code });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * GET /api/v1/offices/:id
    * Get a single office by ID.
    */

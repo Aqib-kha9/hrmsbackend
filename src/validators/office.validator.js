@@ -6,10 +6,7 @@ const createOfficeSchema = Joi.object({
     'any.required': 'Company is required',
     'number.base': 'Company ID must be a number',
   }),
-  code: Joi.string().trim().max(20).required().messages({
-    'any.required': 'Location code is required (e.g., LOC-IND)',
-    'string.max': 'Location code must be at most 20 characters',
-  }),
+  code: Joi.string().trim().max(20).allow('', null).optional(),
   name: Joi.string().trim().max(100).required().messages({
     'any.required': 'Office name is required',
     'string.max': 'Office name must be at most 100 characters',

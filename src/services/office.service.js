@@ -1,7 +1,104 @@
 const { Office, Company, Employee, AttendanceRecord, sequelize } = require('../models');
 const { Op } = require('sequelize');
 
+function deriveCompanyLocationPrefix(company) {
+  if (!company) return 'LOC';
+  const name = (company.name || '').trim();
+  if (/^bp\s*marketing/i.test(name)) return 'BPM';
+  if (/^apaar\s*logistics/i.test(name)) return 'APR';
+  if (/^ae\s*solutions/i.test(name)) return 'AES';
+  if (/^pj\s*enterprises/i.test(name)) return 'PJE';
+  if (company.code && company.code.trim().length >= 2) return company.code.trim().toUpperCase();
+
+  const words = name.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 3) {
+    return (words[0][0] + words[1][0] + words[2][0]).toUpperCase();
+  } else if (words.length === 2) {
+    return (words[0].slice(0, 2) + words[1][0]).toUpperCase();
+  } else if (words.length === 1) {
+    return words[0].slice(0, 3).toUpperCase();
+  }
+  return 'LOC';
+}
+
+function deriveCityPrefix(city, name) {
+  const target = (city && city.trim()) ? city.trim() : (name && name.trim()) ? name.trim() : '';
+  if (!target) return 'LOC';
+
+  const clean = target.replace(/[^a-zA-Z0-9\s]/g, '').trim().toUpperCase();
+  const cityMap = {
+    'INDORE': 'IND',
+    'RATLAM': 'RTM',
+    'UJJAIN': 'UJJ',
+    'NOIDA': 'NOI',
+    'GURGAON': 'GGN',
+    'GURUGRAM': 'GGN',
+    'MUMBAI': 'MUM',
+    'BOMBAY': 'MUM',
+    'DELHI': 'DEL',
+    'NEW DELHI': 'DEL',
+    'BANGALORE': 'BLR',
+    'BENGALURU': 'BLR',
+    'PUNE': 'PUN',
+    'HYDERABAD': 'HYD',
+    'CHENNAI': 'MAA',
+    'KOLKATA': 'CCU',
+    'AHMEDABAD': 'AMD',
+    'JAIPUR': 'JAI',
+    'BHOPAL': 'BPL',
+    'GWALIOR': 'GWL',
+    'JABALPUR': 'JBP',
+    'LUCKNOW': 'LKO',
+    'KANPUR': 'KNP',
+    'CHANDIGARH': 'IXC',
+  };
+  if (cityMap[clean]) return cityMap[clean];
+
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1].slice(0, 2)).toUpperCase();
+  }
+  return clean.slice(0, 3).toUpperCase();
+}
+
 class OfficeService {
+  /**
+   * Auto-generate a clean, unique company-specific location code (e.g. BPM-IND, BPM-IND-02).
+   */
+  async generateOfficeCode({ company_id, city, name }) {
+    let compPrefix = 'LOC';
+    if (company_id) {
+      const company = await Company.findByPk(company_id);
+      if (company) {
+        compPrefix = deriveCompanyLocationPrefix(company);
+      }
+    }
+    const cityPrefix = deriveCityPrefix(city, name);
+    const baseCode = `${compPrefix}-${cityPrefix}`;
+
+    const existingExact = await Office.findOne({ where: { code: baseCode } });
+    if (!existingExact) {
+      return baseCode;
+    }
+
+    const existingSimilar = await Office.findAll({
+      where: {
+        code: {
+          [Op.like]: `${baseCode}%`,
+        },
+      },
+      attributes: ['code'],
+    });
+
+    const usedCodes = new Set(existingSimilar.map((o) => o.code));
+    for (let i = 2; i <= 99; i++) {
+      const candidate = `${baseCode}-${String(i).padStart(2, '0')}`;
+      if (!usedCodes.has(candidate)) {
+        return candidate;
+      }
+    }
+    return `${baseCode}-${Date.now().toString().slice(-4)}`;
+  }
   /**
    * List all offices with optional filters, search, pagination, and company info.
    * @param {Object} options
@@ -39,7 +136,7 @@ class OfficeService {
         {
           model: Company,
           as: 'company',
-          attributes: ['id', 'name'],
+          attributes: ['id', 'name', 'code', 'city', 'state'],
         },
       ],
       order: [['created_at', 'DESC']],
@@ -91,7 +188,7 @@ class OfficeService {
         {
           model: Company,
           as: 'company',
-          attributes: ['id', 'name'],
+          attributes: ['id', 'name', 'code', 'city', 'state'],
         },
       ],
     });
@@ -125,8 +222,15 @@ class OfficeService {
       throw error;
     }
 
-    // Check unique code constraint
-    if (data.code) {
+    // Auto-generate unique code if not provided or blank
+    if (!data.code || !String(data.code).trim()) {
+      data.code = await this.generateOfficeCode({
+        company_id: data.company_id,
+        city: data.city,
+        name: data.name,
+      });
+    } else {
+      data.code = String(data.code).trim().toUpperCase();
       const existing = await Office.findOne({ where: { code: data.code } });
       if (existing) {
         const error = new Error(`Location code "${data.code}" is already in use`);
@@ -137,7 +241,7 @@ class OfficeService {
 
     const office = await Office.create(data);
     return Office.findByPk(office.id, {
-      include: [{ model: Company, as: 'company', attributes: ['id', 'name'] }],
+      include: [{ model: Company, as: 'company', attributes: ['id', 'name', 'code', 'city', 'state'] }],
     });
   }
 
@@ -163,18 +267,21 @@ class OfficeService {
     }
 
     // Check unique code if changing
-    if (data.code && data.code !== office.code) {
-      const existing = await Office.findOne({ where: { code: data.code } });
-      if (existing) {
-        const error = new Error(`Location code "${data.code}" is already in use`);
-        error.statusCode = 409;
-        throw error;
+    if (data.code) {
+      data.code = String(data.code).trim().toUpperCase();
+      if (data.code !== office.code) {
+        const existing = await Office.findOne({ where: { code: data.code } });
+        if (existing) {
+          const error = new Error(`Location code "${data.code}" is already in use`);
+          error.statusCode = 409;
+          throw error;
+        }
       }
     }
 
     await office.update(data);
     return Office.findByPk(id, {
-      include: [{ model: Company, as: 'company', attributes: ['id', 'name'] }],
+      include: [{ model: Company, as: 'company', attributes: ['id', 'name', 'code', 'city', 'state'] }],
     });
   }
 
