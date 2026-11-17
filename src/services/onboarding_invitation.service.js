@@ -243,8 +243,8 @@ class OnboardingInvitationService {
                 folder: `hrms/onboarding/${invite.id}`,
                 format: ext,
               });
-              fileUrl = uploadRes.public_id;
-              filePath = uploadRes.public_id;
+              fileUrl = uploadRes.secure_url || uploadRes.url || uploadRes.public_id;
+              filePath = uploadRes.secure_url || uploadRes.url || uploadRes.public_id;
             }
           } catch (uploadErr) {
             logger.warn(`Failed to save uploaded doc ${doc.filename}: ${uploadErr.message}`);
@@ -414,7 +414,7 @@ class OnboardingInvitationService {
             employee_id: newEmployee.id,
             name: doc.filename || `${doc.type || 'Document'}.pdf`,
             type: typeMapping[doc.type] || 'id_proof',
-            file_path: doc.file_path || `uploads/${doc.filename || doc.type}`,
+            file_path: doc.file_path || doc.file_url || `uploads/${doc.filename || doc.type}`,
             file_size: doc.size || 102400,
             mime_type: doc.mime_type || 'image/jpeg',
             status: 'verified',

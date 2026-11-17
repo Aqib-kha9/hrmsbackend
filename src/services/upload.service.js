@@ -1,145 +1,270 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const cloudinary = require('cloudinary').v2;
 const logger = require('../utils/logger');
 const env = require('../config/env');
 
+const isCloudinaryConfigured = Boolean(
+  env.CLOUDINARY_CLOUD_NAME &&
+  env.CLOUDINARY_API_KEY &&
+  env.CLOUDINARY_API_SECRET
+);
+
+if (isCloudinaryConfigured) {
+  cloudinary.config({
+    cloud_name: env.CLOUDINARY_CLOUD_NAME,
+    api_key: env.CLOUDINARY_API_KEY,
+    api_secret: env.CLOUDINARY_API_SECRET,
+    secure: true,
+  });
+  logger.info('Cloudinary configured — cloud document storage active');
+} else {
+  logger.warn('Cloudinary credentials missing — using local file system storage');
+}
+
 /**
- * Local File Upload Service
- * Replaces Cloudinary with local file system storage.
+ * Universal File Upload Service
+ * Automatically uploads to Cloudinary in production/cloud environments
+ * with graceful fallback to local file system.
  */
 class UploadService {
   constructor() {
-    // Base uploads directory: backend/uploads
     this.baseUploadDir = path.join(__dirname, '../../uploads');
-    
-    // Ensure base directory exists
     if (!fs.existsSync(this.baseUploadDir)) {
-      fs.mkdirSync(this.baseUploadDir, { recursive: true });
+      try {
+        fs.mkdirSync(this.baseUploadDir, { recursive: true });
+      } catch (err) {
+        // Ignored in read-only environments
+      }
     }
   }
 
   /**
-   * Save a file buffer to local storage
-   * @param {Buffer} buffer - The file buffer
+   * Upload a file buffer (Cloudinary primary, Local fallback)
+   * @param {Buffer} buffer - File buffer
    * @param {Object} options
-   * @param {string} options.folder - Subfolder (e.g., 'hrms/documents')
-   * @param {string} options.resource_type - Not strictly needed locally, kept for compatibility
-   * @param {string} options.format - File extension (e.g., 'pdf', 'png')
-   * @returns {Promise<Object>} Object containing secure_url and public_id
+   * @param {string} [options.folder] - Subfolder path (e.g. 'hrms/documents' or 'hrms/onboarding/1')
+   * @param {string} [options.filename] - Custom filename or prefix
+   * @param {string} [options.format] - File format / extension ('pdf', 'png', etc.)
+   * @param {string} [options.resourceType] - 'auto' | 'image' | 'raw'
+   * @returns {Promise<{secure_url: string, url: string, public_id: string, format: string, resource_type: string, bytes: number}>}
    */
   async uploadFile(buffer, options = {}) {
-    try {
-      const folderPath = options.folder || 'hrms/general';
-      const fileExt = options.format || 'bin';
-      
-      // Generate a unique filename using crypto
-      const uniqueSuffix = crypto.randomBytes(16).toString('hex');
-      const filename = `${uniqueSuffix}.${fileExt}`;
-      
-      // Target directory
-      const targetDir = path.join(this.baseUploadDir, folderPath);
-      
-      // Ensure target directory exists
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
+    if (isCloudinaryConfigured) {
+      try {
+        return await this._uploadToCloudinary(buffer, options);
+      } catch (cloudErr) {
+        logger.error(`Cloudinary upload failed: ${cloudErr.message}. Attempting local fallback...`);
+        return await this._uploadToLocal(buffer, options);
       }
-      
-      // Full file path
-      const filePath = path.join(targetDir, filename);
-      
-      // Write buffer to file
-      await fs.promises.writeFile(filePath, buffer);
-      
-      // Generate the public URL
-      // We store relative URL like /uploads/hrms/documents/filename.pdf
-      const relativeUrl = `/uploads/${folderPath}/${filename}`;
-      const fullUrl = `${env.BACKEND_URL || env.APP_URL}${relativeUrl}`;
-      
-      logger.info(`File uploaded locally to: ${filePath}`);
-      
-      return {
-        secure_url: fullUrl,
-        public_id: relativeUrl, // Using relative URL as public_id for easy local deletion
-        format: fileExt
-      };
-    } catch (error) {
-      logger.error(`Local upload failed: ${error.message}`, error);
-      throw error;
     }
+    return await this._uploadToLocal(buffer, options);
   }
 
   /**
-   * Delete a file from local storage
-   * @param {string} relativeUrl - The relative URL (e.g., /uploads/hrms/documents/filename.pdf)
-   * @param {string} resourceType - Kept for compatibility
-   * @returns {Promise<boolean>} True if successful
+   * Cloudinary stream upload implementation
    */
-  async deleteFile(relativeUrl, resourceType = 'auto') {
-    if (!relativeUrl) return false;
+  async _uploadToCloudinary(buffer, options = {}) {
+    const {
+      folder = 'hrms/documents',
+      filename,
+      resourceType,
+      format,
+    } = options;
+
+    const resType = resourceType || 'auto';
+    const uniqueSuffix = crypto.randomBytes(8).toString('hex');
+    const sanitizedFilename = filename
+      ? `${filename.replace(/[^a-zA-Z0-9_-]/g, '_')}_${uniqueSuffix}`
+      : `file_${Date.now()}_${uniqueSuffix}`;
+
+    const uploadOptions = {
+      folder,
+      resource_type: resType,
+      public_id: sanitizedFilename,
+      overwrite: true,
+      use_filename: true,
+      unique_filename: true,
+    };
+
+    if (format) {
+      uploadOptions.format = format;
+    }
+
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        uploadOptions,
+        (error, result) => {
+          if (error) {
+            return reject(error);
+          }
+
+          logger.info(`Cloudinary upload success: ${result.public_id} (${result.secure_url})`);
+          resolve({
+            secure_url: result.secure_url,
+            url: result.secure_url,
+            public_id: result.public_id,
+            format: result.format || format || '',
+            resource_type: result.resource_type || resType,
+            bytes: result.bytes || buffer.length,
+            width: result.width,
+            height: result.height,
+          });
+        }
+      );
+
+      uploadStream.end(buffer);
+    });
+  }
+
+  /**
+   * Local file system upload implementation
+   */
+  async _uploadToLocal(buffer, options = {}) {
+    const folderPath = options.folder || 'hrms/general';
+    const fileExt = options.format || 'bin';
+    const uniqueSuffix = crypto.randomBytes(16).toString('hex');
+    const filename = `${uniqueSuffix}.${fileExt}`;
+    const targetDir = path.join(this.baseUploadDir, folderPath);
+
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const filePath = path.join(targetDir, filename);
+    await fs.promises.writeFile(filePath, buffer);
+
+    const relativeUrl = `/uploads/${folderPath}/${filename}`;
+    const fullUrl = `${env.BACKEND_URL || env.APP_URL}${relativeUrl}`;
+
+    logger.info(`File uploaded locally to: ${filePath}`);
+
+    return {
+      secure_url: fullUrl,
+      url: fullUrl,
+      public_id: relativeUrl,
+      format: fileExt,
+      resource_type: 'auto',
+      bytes: buffer.length,
+    };
+  }
+
+  /**
+   * Delete file from Cloudinary or Local
+   * @param {string} publicIdOrUrl
+   * @param {string} [resourceType='auto']
+   * @returns {Promise<boolean>}
+   */
+  async deleteFile(publicIdOrUrl, resourceType = 'auto') {
+    if (!publicIdOrUrl) return false;
+
+    // Cloudinary deletion
+    if (isCloudinaryConfigured && (publicIdOrUrl.includes('cloudinary.com') || !publicIdOrUrl.startsWith('/uploads'))) {
+      try {
+        let publicId = publicIdOrUrl;
+        let resType = resourceType;
+
+        if (publicIdOrUrl.includes('cloudinary.com')) {
+          const parsed = this.extractPublicIdFromUrl(publicIdOrUrl);
+          if (parsed) {
+            publicId = parsed.publicId;
+            resType = parsed.resourceType || resourceType;
+          }
+        }
+
+        const result = await cloudinary.uploader.destroy(publicId, {
+          resource_type: resType,
+        });
+        logger.info(`Cloudinary destroy for ${publicId}: ${result.result}`);
+        return result.result === 'ok';
+      } catch (err) {
+        logger.error(`Cloudinary delete error: ${err.message}`);
+        return false;
+      }
+    }
+
+    // Local deletion
+    return this._deleteFromLocal(publicIdOrUrl);
+  }
+
+  async _deleteFromLocal(relativeUrl) {
     try {
-      // Decode URL in case it has encoded characters
       const decodedUrl = decodeURI(relativeUrl);
-      
-      // Remove '/uploads/' from the start to get the relative file path within the uploads directory
       let filePathWithinUploads = decodedUrl;
       if (decodedUrl.startsWith('/uploads/')) {
         filePathWithinUploads = decodedUrl.replace('/uploads/', '');
       } else if (decodedUrl.includes('/uploads/')) {
         filePathWithinUploads = decodedUrl.split('/uploads/')[1];
       }
-      
+
       const fullFilePath = path.join(this.baseUploadDir, filePathWithinUploads);
-      
       if (fs.existsSync(fullFilePath)) {
         await fs.promises.unlink(fullFilePath);
         logger.info(`Local file deleted: ${fullFilePath}`);
         return true;
-      } else {
-        logger.warn(`Local file not found for deletion: ${fullFilePath}`);
-        return false;
       }
+      return false;
     } catch (error) {
-      logger.error(`Local delete failed for ${relativeUrl}: ${error.message}`);
+      logger.error(`Local delete failed: ${error.message}`);
       return false;
     }
   }
 
   /**
-   * Extract public ID / relative path from URL (compatibility with Cloudinary method)
+   * Extract public ID and resource type from URL
    */
   extractPublicIdFromUrl(url) {
     if (!url) return null;
-    
+
+    if (url.includes('cloudinary.com')) {
+      try {
+        const urlParts = url.split('/');
+        const uploadIndex = urlParts.indexOf('upload');
+        if (uploadIndex === -1) return null;
+
+        const resourceType = urlParts[uploadIndex - 1] || 'auto';
+        const afterUpload = urlParts.slice(uploadIndex + 1);
+        const withoutVersion = afterUpload.filter((part) => !part.match(/^v\d+$/));
+        const lastPart = withoutVersion[withoutVersion.length - 1];
+        const lastDotIndex = lastPart.lastIndexOf('.');
+        if (lastDotIndex !== -1) {
+          withoutVersion[withoutVersion.length - 1] = lastPart.substring(0, lastDotIndex);
+        }
+
+        return {
+          publicId: withoutVersion.join('/'),
+          resourceType,
+        };
+      } catch (err) {
+        logger.warn(`Failed to extract public ID from Cloudinary URL: ${url}`);
+        return null;
+      }
+    }
+
     try {
-      // If it's a full URL, parse it to get pathname
       if (url.startsWith('http')) {
         const parsedUrl = new URL(url);
-        return {
-          publicId: parsedUrl.pathname, // This gives something like /uploads/folder/file.ext
-          resourceType: 'auto'
-        };
+        return { publicId: parsedUrl.pathname, resourceType: 'auto' };
       }
-      
-      // If it's already relative
-      return {
-        publicId: url,
-        resourceType: 'auto'
-      };
-    } catch (e) {
+      return { publicId: url, resourceType: 'auto' };
+    } catch {
       return { publicId: url, resourceType: 'auto' };
     }
   }
 
   /**
-   * Generate URL (compatibility)
+   * Generate URL helper
    */
-  generateUrl(publicId, options = {}) {
-    // We already have the publicId as the relative path, so just prepend APP_URL if needed
-    if (publicId && publicId.startsWith('http')) {
-      return publicId;
+  generateUrl(publicIdOrUrl, options = {}) {
+    if (!publicIdOrUrl) return '';
+    if (publicIdOrUrl.startsWith('http')) return publicIdOrUrl;
+
+    if (isCloudinaryConfigured && !publicIdOrUrl.startsWith('/uploads')) {
+      return cloudinary.url(publicIdOrUrl, { secure: true, ...options });
     }
-    return `${env.BACKEND_URL || env.APP_URL}${publicId}`;
+
+    return `${env.BACKEND_URL || env.APP_URL}${publicIdOrUrl}`;
   }
 }
 

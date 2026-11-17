@@ -105,7 +105,7 @@ class DocumentService {
       employee_id: employeeId,
       name: metadata.name || originalname,
       type: this._normalizeDocType(metadata.type),
-      file_path: uploadResult.secure_url,
+      file_path: uploadResult.secure_url || uploadResult.url || uploadResult.public_id,
       file_size: uploadResult.bytes || size,
       mime_type: mimetype,
       status: 'pending',

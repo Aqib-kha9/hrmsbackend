@@ -7,8 +7,8 @@ const env = {
   NODE_ENV: (process.env.NODE_ENV && process.env.NODE_ENV.trim()) || 'development',
   PORT: parseInt(process.env.PORT) || 5000,
   API_PREFIX: process.env.API_PREFIX || '/api/v1',
-  APP_URL: process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
-  FRONTEND_URL: process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000',
+  APP_URL: process.env.APP_URL || process.env.FRONTEND_URL || 'https://hrms-pearl-tau.vercel.app',
+  FRONTEND_URL: process.env.FRONTEND_URL || process.env.APP_URL || 'https://hrms-pearl-tau.vercel.app',
   BACKEND_URL: process.env.BACKEND_URL || `http://localhost:${parseInt(process.env.PORT) || 5000}`,
 
   // Database
@@ -40,7 +40,10 @@ const env = {
   // Logging
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 
-  // Cloudinary has been removed in favor of local storage
+  // Cloudinary (Media & Document Uploads)
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
   // SMTP (Brevo / Sendinblue)
   SMTP_HOST: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
   SMTP_PORT: parseInt(process.env.SMTP_PORT) || 587,

@@ -21,5 +21,8 @@ Thumbs.db
 # Build
 dist/
 
+# Uploads (Local files)
+uploads/
+
 # Test
 coverage/

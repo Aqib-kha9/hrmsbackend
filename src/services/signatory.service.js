@@ -24,7 +24,7 @@ class SignatoryService {
         folder: 'hrms/signatures',
         format: 'png' // signatures are usually transparent PNGs
       });
-      signatureUrl = uploadResult.secure_url;
+      signatureUrl = uploadResult.secure_url || uploadResult.url || uploadResult.public_id;
     }
 
     const signatory = await AuthorisedSignatory.create({
@@ -50,7 +50,7 @@ class SignatoryService {
         folder: 'hrms/signatures',
         format: 'png'
       });
-      signatureUrl = uploadResult.secure_url;
+      signatureUrl = uploadResult.secure_url || uploadResult.url || uploadResult.public_id;
     }
 
     await signatory.update({
