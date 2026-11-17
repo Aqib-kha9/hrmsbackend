@@ -986,6 +986,16 @@ class PayrollLedgerService {
     const cycleWhere = {};
     if (year) cycleWhere.year = parseInt(year);
 
+    let currentLedgerRows = [];
+    let currentCycleId = null;
+    try {
+      const curLedger = await this.getCurrentLedger();
+      if (curLedger) {
+        currentLedgerRows = curLedger.rows || [];
+        currentCycleId = curLedger.cycle?.id;
+      }
+    } catch (_) {}
+
     const entries = await PayrollEntry.findAll({
       where: { employee_id: employeeId },
       include: [{
@@ -1010,9 +1020,70 @@ class PayrollLedgerService {
 
       const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
 
+      // 1. If this entry belongs to the current active payroll cycle, use the live ledger values!
+      const activeLedgerRow = currentLedgerRows.find(r => r.id === entry.id || r.employeeId === rowEmp.id);
+      if (activeLedgerRow && entry.cycle_id === currentCycleId) {
+        return {
+          id: entry.id,
+          employeeId: rowEmp.id,
+          employeeCode: rowEmp.emp_code,
+          name: rowEmp.name,
+          cycleId: cycle.id,
+          month: cycle.month,
+          month_index: cycle.month_index,
+          year: cycle.year,
+          status: activeLedgerRow.status || entry.status || cycle.status || 'Paid',
+          absentDays: activeLedgerRow.absentDays || 0,
+          bonus: Number(activeLedgerRow.bonus || entry.bonus) || 0,
+          previousArrears: Number(activeLedgerRow.previousArrears || entry.previous_arrears) || 0,
+          incentive: Number(activeLedgerRow.incentive || entry.incentive) || 0,
+          loanDeduction: Number(activeLedgerRow.loanDeduction || entry.loan_deduction) || 0,
+          otherDeduction: Number(activeLedgerRow.otherDeduction || entry.other_deduction) || 0,
+          uan: rowEmp.uan || '--',
+          designation: rowEmp.designation || '',
+          location: rowEmp.location || rowEmp.office?.name || 'Unknown',
+          company: rowEmp.company?.name || rowEmp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+          bankName: rowEmp.bank_name || '--',
+          bankAccountNumber: rowEmp.bank_account_number || '--',
+          pfNumber: rowEmp.pf_number || '--',
+          workingDays: activeLedgerRow.workingDays || dynamicDays,
+          payableDays: activeLedgerRow.payableDays,
+          present_days: activeLedgerRow.presentDays ?? activeLedgerRow.payableDays,
+          total_muster_days: activeLedgerRow.totalMusterDays || 30,
+          lwp_days: activeLedgerRow.lwpDays ?? activeLedgerRow.absentDays,
+          basic: activeLedgerRow.basic,
+          hra: activeLedgerRow.hra,
+          other: activeLedgerRow.other,
+          conveyance: activeLedgerRow.conveyance,
+          totalEarnings: activeLedgerRow.totalEarnings,
+          proratedGross: activeLedgerRow.proratedGross,
+          pf: activeLedgerRow.pf,
+          esi: activeLedgerRow.esi,
+          pt: activeLedgerRow.pt,
+          grossDeductions: activeLedgerRow.grossDeductions,
+          net: activeLedgerRow.net,
+          pfEmployer: activeLedgerRow.pfEmployer,
+          esiEmployer: activeLedgerRow.esiEmployer,
+          totalMonthlyCTC: activeLedgerRow.totalMonthlyCTC
+        };
+      }
+
+      // 2. For other past cycles, check monthly attendance for real absent days
+      let effectiveAbsent = entry.absent_days || 0;
+      try {
+        const { MonthlyAttendance } = require('../models');
+        const mAtt = await MonthlyAttendance.findOne({
+          where: { employee_id: rowEmp.id, month: cycle.month_index + 1, year: cycle.year }
+        });
+        if (mAtt) {
+          effectiveAbsent = Number(mAtt.absent_days) + Number(mAtt.half_days) * 0.5;
+        }
+      } catch (_) {}
+
       const calculation = this._calculateRow({
         ...rowEmp.toJSON(),
         ...entry.toJSON(),
+        absent_days: effectiveAbsent,
         fixed_gross: rowEmp.fixed_gross,
         pf_applicable: rowEmp.pf_applicable,
         pf_ceiling: rowEmp.pf_ceiling,
@@ -1029,7 +1100,7 @@ class PayrollLedgerService {
         month_index: cycle.month_index,
         year: cycle.year,
         status: entry.status || cycle.status || 'Draft',
-        absentDays: entry.absent_days || 0,
+        absentDays: effectiveAbsent,
         bonus: Number(entry.bonus) || 0,
         previousArrears: Number(entry.previous_arrears) || 0,
         incentive: Number(entry.incentive) || 0,
@@ -1042,7 +1113,11 @@ class PayrollLedgerService {
         bankName: rowEmp.bank_name || '--',
         bankAccountNumber: rowEmp.bank_account_number || '--',
         pfNumber: rowEmp.pf_number || '--',
-        workingDays: Math.max(0, dynamicDays - (entry.absent_days || 0)),
+        workingDays: Math.max(0, dynamicDays - effectiveAbsent),
+        payableDays: calculation.payableDays,
+        present_days: entry.present_days || calculation.payableDays,
+        total_muster_days: entry.total_muster_days || 30,
+        lwp_days: effectiveAbsent,
         ...calculation,
       };
     }));
@@ -1433,11 +1508,11 @@ class PayrollLedgerService {
     try {
       const ledger = await this.getCurrentLedger();
       if (ledger && ledger.cycle && ledger.cycle.id === cycle.id) {
-        calculatedRow = ledger.rows.find(r => r.id === Number(entryId));
+        calculatedRow = ledger.rows.find(r => r.id === Number(entryId) || r.employeeId === emp.id);
       }
       if (!calculatedRow) {
         const pastLedger = await this.getLedgerByCycleId(cycle.id);
-        calculatedRow = pastLedger.rows.find(r => r.id === Number(entryId));
+        calculatedRow = pastLedger.rows.find(r => r.id === Number(entryId) || r.employeeId === emp.id);
       }
     } catch (e) {
       logger.warn(`Could not resolve ledger row for payslip PDF: ${e.message}`);
