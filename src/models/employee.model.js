@@ -129,7 +129,7 @@ const Employee = sequelize.define('Employee', {
     comment: 'Minutes late after which attendance is marked as half day',
   },
   profile_image: {
-    type: DataTypes.STRING(500),
+    type: DataTypes.TEXT('long'),
     allowNull: true,
   },
   company_id: {
