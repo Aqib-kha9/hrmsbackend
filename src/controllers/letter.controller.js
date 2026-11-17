@@ -6,6 +6,7 @@ const { Letter, LetterTemplate, Employee, Office, Company, AuthorisedSignatory, 
 const { success, paginated } = require('../utils/response');
 const logger = require('../utils/logger');
 const env = require('../config/env');
+const { PAGINATION } = require('../utils/constants');
 
 /**
  * Helper to locate an offer letter by its digital acceptance token
@@ -70,7 +71,12 @@ class LetterController {
     try {
       const employeeId = req.employee.id;
       const { page, limit, type, status } = req.query;
-      const result = await letterService.getLetters(employeeId, { page, limit, type, status });
+      const result = await letterService.getLetters(employeeId, {
+        page: page ? parseInt(page, 10) : 1,
+        limit: limit ? parseInt(limit, 10) : PAGINATION.DEFAULT_LIMIT,
+        type,
+        status,
+      });
       return paginated(res, 'Letters fetched', result.data, result.pagination, 200);
     } catch (err) {
       logger.error(`Get my letters error: ${err.message}`);
@@ -103,7 +109,13 @@ class LetterController {
   async getAllLetters(req, res, next) {
     try {
       const { page, limit, type, status, search } = req.query;
-      const result = await letterService.getAllLetters({ page, limit, type, status, search });
+      const result = await letterService.getAllLetters({
+        page: page ? parseInt(page, 10) : 1,
+        limit: limit ? parseInt(limit, 10) : PAGINATION.DEFAULT_LIMIT,
+        type,
+        status,
+        search,
+      });
       return paginated(res, 'All letters fetched', result.data, result.pagination, 200);
     } catch (err) {
       logger.error(`Get all letters error: ${err.message}`);

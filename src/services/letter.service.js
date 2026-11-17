@@ -6,7 +6,9 @@ const { PAGINATION } = require('../utils/constants');
 
 class LetterService {
   async getLetters(employeeId, { page = 1, limit = PAGINATION.DEFAULT_LIMIT, type, status } = {}) {
-    const offset = (page - 1) * limit;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(500, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
+    const offset = (pageNum - 1) * limitNum;
     const whereClause = { employee_id: employeeId };
     if (type) whereClause.type = type;
     if (status) whereClause.status = status;
@@ -14,17 +16,17 @@ class LetterService {
     const { rows, count } = await Letter.findAndCountAll({
       where: whereClause,
       order: [['issued_date', 'DESC']],
-      limit,
+      limit: limitNum,
       offset,
     });
 
     return {
       data: rows,
       pagination: {
-        page,
-        limit,
+        page: pageNum,
+        limit: limitNum,
         total: count,
-        totalPages: Math.ceil(count / limit),
+        totalPages: Math.ceil(count / limitNum),
       },
     };
   }
@@ -56,7 +58,9 @@ class LetterService {
   }
 
   async getAllLetters({ page = 1, limit = PAGINATION.DEFAULT_LIMIT, type, status, search } = {}) {
-    const offset = (page - 1) * limit;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, Math.min(500, parseInt(limit, 10) || PAGINATION.DEFAULT_LIMIT));
+    const offset = (pageNum - 1) * limitNum;
     const whereClause = {};
     if (type) whereClause.type = type;
     if (status) whereClause.status = status;
@@ -91,17 +95,17 @@ class LetterService {
         },
       ],
       order: [['issued_date', 'DESC'], ['id', 'DESC']],
-      limit,
+      limit: limitNum,
       offset,
     });
 
     return {
       data: rows,
       pagination: {
-        page,
-        limit,
+        page: pageNum,
+        limit: limitNum,
         total: count,
-        totalPages: Math.ceil(count / limit),
+        totalPages: Math.ceil(count / limitNum),
       },
     };
   }
