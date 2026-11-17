@@ -1,9 +1,69 @@
+const crypto = require('crypto');
 const letterService = require('../services/letter.service');
 const letterPdfService = require('../services/letter_pdf.service');
 const emailService = require('../services/email.service');
-const { LetterTemplate, Employee, Office, Company, AuthorisedSignatory } = require('../models');
+const { Letter, LetterTemplate, Employee, Office, Company, AuthorisedSignatory, Role, sequelize } = require('../models');
 const { success, paginated } = require('../utils/response');
 const logger = require('../utils/logger');
+const env = require('../config/env');
+
+/**
+ * Helper to locate an offer letter by its digital acceptance token
+ */
+async function findLetterByAcceptanceToken(token) {
+  if (!token) return null;
+  try {
+    const letter = await Letter.findOne({
+      where: sequelize.where(
+        sequelize.fn('JSON_UNQUOTE', sequelize.fn('JSON_EXTRACT', sequelize.col('metadata'), '$.acceptance_token')),
+        token
+      ),
+      include: [
+        {
+          model: Employee,
+          as: 'issuedTo',
+          include: [
+            { model: Office, as: 'office' },
+            { model: Company, as: 'company' },
+          ],
+        },
+        {
+          model: AuthorisedSignatory,
+          as: 'signatory',
+        },
+      ],
+    });
+    if (letter) return letter;
+  } catch (err) {
+    logger.warn(`JSON_EXTRACT lookup failed (${err.message}), falling back to scan`);
+  }
+
+  // Fallback: search recent offer letters
+  const letters = await Letter.findAll({
+    where: { type: 'offer' },
+    order: [['id', 'DESC']],
+    limit: 500,
+    include: [
+      {
+        model: Employee,
+        as: 'issuedTo',
+        include: [
+          { model: Office, as: 'office' },
+          { model: Company, as: 'company' },
+        ],
+      },
+      {
+        model: AuthorisedSignatory,
+        as: 'signatory',
+      },
+    ],
+  });
+
+  return letters.find(l => {
+    const meta = typeof l.metadata === 'string' ? JSON.parse(l.metadata || '{}') : (l.metadata || {});
+    return meta && meta.acceptance_token === token;
+  }) || null;
+}
 
 class LetterController {
   async getMyLetters(req, res, next) {
@@ -303,45 +363,15 @@ class LetterController {
         }
       }
 
-      // ── Integrated Self-Onboarding Invitation (Optional / Combined) ──
-      let onboardingLink = null;
-      let onboardingInvitation = null;
+      // ── Digital Offer Acceptance Link generation ──
+      const isOfferLetter = type === 'offer' || bodyType === 'offer' || !!candidateData;
+      let acceptanceToken = null;
+      let acceptanceLink = null;
+      const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
 
-      if (includeOnboarding && candidateData && candidateData.email) {
-        try {
-          const onboardingInvitationService = require('../services/onboarding_invitation.service');
-          
-          let company_id = candidateData.company_id || null;
-          if (!company_id && candidateData.company) {
-            const comp = await Company.findOne({ where: { name: candidateData.company } });
-            if (comp) company_id = comp.id;
-          }
-          let office_id = candidateData.office_id || null;
-          if (!office_id && candidateData.office) {
-            const off = await Office.findOne({ where: { name: candidateData.office } });
-            if (off) office_id = off.id;
-          }
-
-          const inviteResult = await onboardingInvitationService.createInvitation({
-            email: candidateData.email.trim(),
-            candidate_name: candidateData.name || null,
-            phone: candidateData.phone || null,
-            designation: candidateData.designation || null,
-            department: candidateData.department || null,
-            office_id,
-            company_id,
-            fixed_gross: parseFloat(candidateData.fixed_gross) || 0,
-            expiry_days: 7,
-            send_email: false, // Sent inside official letter email
-          }, req.employee ? req.employee.id : null);
-
-          onboardingInvitation = inviteResult.invitation;
-          onboardingLink = inviteResult.link;
-          logger.info(`Onboarding invitation created/reused for ${candidateData.email}: ${onboardingLink}`);
-        } catch (inviteErr) {
-          logger.error(`Error generating onboarding invitation for ${candidateData.email}: ${inviteErr.message}`);
-          throw inviteErr;
-        }
+      if (isOfferLetter) {
+        acceptanceToken = crypto.randomBytes(32).toString('hex');
+        acceptanceLink = `${frontendUrl}/offer-acceptance?token=${acceptanceToken}`;
       }
 
       // Generate PDF
@@ -357,8 +387,15 @@ class LetterController {
       let letterId = null;
       const letterMetadata = {
         candidate_details: candidateData || null,
-        onboarding_link: onboardingLink || null,
-        onboarding_invitation_id: onboardingInvitation ? onboardingInvitation.id : null,
+        onboarding_link: null,
+        onboarding_invitation_id: null,
+        onboarding_invited: false,
+        acceptance_token: acceptanceToken,
+        acceptance_status: isOfferLetter ? 'pending' : null,
+        candidate_signature: null,
+        signed_name: null,
+        accepted_at: null,
+        rejection_reason: null,
       };
 
       if (resolvedEmployeeId) {
@@ -401,14 +438,14 @@ class LetterController {
         companyName,
         pdfBuffer,
         customSubject: subject,
-        onboardingLink,
+        acceptanceLink,
       });
 
       return success(res, `Letter sent successfully to registered email (${employee.email})`, {
         letter_id: letterId,
         recipient_email: employee.email,
-        onboarding_link: onboardingLink,
-        onboarding_id: onboardingInvitation?.id,
+        acceptance_token: acceptanceToken,
+        acceptance_link: acceptanceLink,
         email_accepted: emailResult.accepted,
         email_rejected: emailResult.rejected,
       }, 200);
@@ -454,6 +491,21 @@ class LetterController {
       const targetCode = letter.issuedTo?.emp_code || '';
       const companyName = letter.issuedTo?.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
 
+      // Digital offer acceptance link
+      const isOfferLetter = letter.type === 'offer';
+      let acceptanceLink = null;
+      const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
+
+      if (isOfferLetter) {
+        let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+        if (!meta.acceptance_token) {
+          meta.acceptance_token = crypto.randomBytes(32).toString('hex');
+          meta.acceptance_status = meta.acceptance_status || 'pending';
+          await letter.update({ metadata: meta });
+        }
+        acceptanceLink = `${frontendUrl}/offer-acceptance?token=${meta.acceptance_token}`;
+      }
+
       // Generate PDF
       const pdfBuffer = await letterPdfService.generateLetterPDF({
         content: letter.content || '',
@@ -480,7 +532,7 @@ class LetterController {
         pdfBuffer,
         customSubject: subject,
         customNote: custom_note,
-        onboardingLink: letter.metadata?.onboarding_link || undefined,
+        acceptanceLink,
       });
 
       if (letter.status === 'draft') {
@@ -490,12 +542,339 @@ class LetterController {
       return success(res, `Letter dispatched successfully to registered email (${targetEmail})`, {
         letter_id: letter.id,
         recipient_email: targetEmail,
-        onboarding_link: letter.metadata?.onboarding_link || null,
+        acceptance_link: acceptanceLink,
         email_accepted: emailResult.accepted,
         email_rejected: emailResult.rejected,
       }, 200);
     } catch (err) {
       logger.error(`Send existing letter email error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  /**
+   * Public: Retrieve offer letter details by digital acceptance token
+   */
+  async getPublicOfferLetter(req, res, next) {
+    try {
+      const { token } = req.params;
+      if (!token) {
+        return res.status(400).json({ success: false, message: 'Acceptance token is required' });
+      }
+
+      const letter = await findLetterByAcceptanceToken(token);
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Offer letter not found or link has expired' });
+      }
+
+      const meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+      const candidateInfo = meta.candidate_details || {};
+
+      const candidateName = letter.candidate_name || letter.issuedTo?.name || candidateInfo.name || 'Candidate';
+      const candidateEmail = letter.candidate_email || letter.issuedTo?.email || candidateInfo.email || '';
+      const candidatePhone = letter.candidate_phone || letter.issuedTo?.phone || candidateInfo.phone || '';
+      const designation = candidateInfo.designation || letter.issuedTo?.designation || 'Specialist';
+      const department = candidateInfo.department || letter.issuedTo?.department || 'Operations';
+      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+      const officeName = candidateInfo.office || letter.issuedTo?.office?.name || 'Head Office';
+      const fixedGross = candidateInfo.fixed_gross || letter.issuedTo?.fixed_gross || 0;
+
+      return success(res, 'Offer letter retrieved successfully', {
+        id: letter.id,
+        title: letter.title,
+        type: letter.type,
+        content: letter.content,
+        status: letter.status,
+        issued_date: letter.issued_date,
+        acceptance_status: meta.acceptance_status || (letter.status === 'acknowledged' ? 'accepted' : 'pending'),
+        candidate: {
+          name: candidateName,
+          email: candidateEmail,
+          phone: candidatePhone,
+          designation,
+          department,
+          company: companyName,
+          office: officeName,
+          fixed_gross: fixedGross,
+          date_of_joining: candidateInfo.date_of_joining || null,
+        },
+        signatory: letter.signatory ? {
+          name: letter.signatory.name,
+          designation: letter.signatory.designation,
+          signature_url: letter.signatory.signature_url,
+        } : null,
+        response_details: {
+          accepted_at: meta.accepted_at || letter.acknowledged_at || null,
+          rejected_at: meta.rejected_at || null,
+          signed_name: meta.signed_name || null,
+          candidate_signature: meta.candidate_signature || null,
+          candidate_comments: meta.candidate_comments || null,
+          rejection_reason: meta.rejection_reason || null,
+        },
+        onboarding_invited: !!meta.onboarding_invited,
+      }, 200);
+    } catch (err) {
+      logger.error(`Get public offer letter error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  /**
+   * Public: Accept or decline offer letter with digital signature
+   */
+  async respondPublicOfferLetter(req, res, next) {
+    try {
+      const { token } = req.params;
+      const { action, signature, signed_name, comments, reason } = req.body;
+
+      if (!token) {
+        return res.status(400).json({ success: false, message: 'Acceptance token is required' });
+      }
+
+      if (!action || !['accept', 'reject'].includes(action)) {
+        return res.status(400).json({ success: false, message: 'Action must be either "accept" or "reject"' });
+      }
+
+      const letter = await findLetterByAcceptanceToken(token);
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Offer letter not found or link has expired' });
+      }
+
+      let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+
+      if (meta.acceptance_status === 'accepted') {
+        return res.status(400).json({ success: false, message: 'This offer letter has already been accepted and digitally signed' });
+      }
+      if (meta.acceptance_status === 'rejected') {
+        return res.status(400).json({ success: false, message: 'This offer letter has already been declined' });
+      }
+
+      const candidateInfo = meta.candidate_details || {};
+      const candidateName = signed_name || letter.candidate_name || letter.issuedTo?.name || candidateInfo.name || 'Candidate';
+      const candidateEmail = letter.candidate_email || letter.issuedTo?.email || candidateInfo.email || '';
+      const designation = candidateInfo.designation || letter.issuedTo?.designation || 'Specialist';
+      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'Apaar Logistics';
+
+      // Find HR recipient for notifications
+      let hrEmail = null;
+      if (letter.issued_by) {
+        const issuer = await Employee.findByPk(letter.issued_by);
+        if (issuer?.email) hrEmail = issuer.email;
+      }
+      if (!hrEmail) {
+        const hrUser = await Employee.findOne({
+          where: { status: 'active' },
+          include: [{ model: Role, as: 'role', where: { name: ['hr', 'admin', 'super_admin'] } }],
+        });
+        hrEmail = hrUser?.email || env.SMTP_USER || 'hr@apaarlogistics.com';
+      }
+
+      if (action === 'accept') {
+        if (!signature) {
+          return res.status(400).json({ success: false, message: 'Digital signature is required to accept the offer' });
+        }
+
+        const acceptedAt = new Date().toISOString();
+        meta = {
+          ...meta,
+          acceptance_status: 'accepted',
+          candidate_signature: signature,
+          signed_name: candidateName,
+          accepted_at: acceptedAt,
+          candidate_comments: comments || null,
+        };
+
+        await letter.update({
+          metadata: meta,
+          status: 'acknowledged',
+          acknowledged_at: new Date(),
+        });
+
+        // Notify HR via email
+        try {
+          await emailService.sendOfferAcceptedNotification({
+            to: hrEmail,
+            candidateName,
+            candidateEmail,
+            designation,
+            companyName,
+            acceptedAt,
+          });
+        } catch (mailErr) {
+          logger.error(`Failed to send offer accepted notification to HR: ${mailErr.message}`);
+        }
+
+        return success(res, 'Offer letter accepted and digitally signed successfully!', {
+          status: 'accepted',
+          accepted_at: acceptedAt,
+          candidate_name: candidateName,
+        }, 200);
+      } else {
+        // Reject
+        const rejectedAt = new Date().toISOString();
+        meta = {
+          ...meta,
+          acceptance_status: 'rejected',
+          rejection_reason: reason || 'Candidate declined the offer',
+          rejected_at: rejectedAt,
+        };
+
+        await letter.update({
+          metadata: meta,
+          status: 'revoked',
+        });
+
+        // Notify HR via email
+        try {
+          await emailService.sendOfferRejectedNotification({
+            to: hrEmail,
+            candidateName,
+            candidateEmail,
+            designation,
+            companyName,
+            rejectedAt,
+            reason: reason || 'No specific reason provided',
+          });
+        } catch (mailErr) {
+          logger.error(`Failed to send offer rejected notification to HR: ${mailErr.message}`);
+        }
+
+        return success(res, 'Offer letter declined.', {
+          status: 'rejected',
+          rejected_at: rejectedAt,
+        }, 200);
+      }
+    } catch (err) {
+      logger.error(`Respond public offer letter error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  /**
+   * Public: Download official offer letter PDF
+   */
+  async downloadPublicOfferLetterPDF(req, res, next) {
+    try {
+      const { token } = req.params;
+      const letter = await findLetterByAcceptanceToken(token);
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Offer letter not found' });
+      }
+
+      const meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+      const candidateInfo = meta.candidate_details || {};
+
+      const employeeObj = letter.issuedTo || {
+        name: letter.candidate_name || candidateInfo.name || 'Candidate',
+        emp_code: 'NEW',
+        email: letter.candidate_email || candidateInfo.email || '',
+        phone: letter.candidate_phone || candidateInfo.phone || '',
+        designation: candidateInfo.designation || 'Specialist',
+        department: candidateInfo.department || 'Operations',
+        company: { name: candidateInfo.company || 'Apaar Logistics' },
+        office: { name: candidateInfo.office || 'Head Office', address: '' },
+      };
+
+      const pdfBuffer = await letterPdfService.generateLetterPDF({
+        content: letter.content || '',
+        employee: employeeObj,
+        title: letter.title,
+        type: letter.type,
+        signatory: letter.signatory,
+      });
+
+      const filename = `${letter.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(pdfBuffer);
+    } catch (err) {
+      logger.error(`Download public offer letter PDF error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  /**
+   * Admin/HR: Send 1-Click Onboarding Portal Invitation for an accepted offer letter
+   */
+  async sendOnboardingInvite(req, res, next) {
+    try {
+      const { id } = req.params;
+      const onboardingInvitationService = require('../services/onboarding_invitation.service');
+
+      const letter = await Letter.findByPk(id, {
+        include: [
+          {
+            model: Employee,
+            as: 'issuedTo',
+            include: [
+              { model: Office, as: 'office' },
+              { model: Company, as: 'company' },
+            ],
+          },
+        ],
+      });
+
+      if (!letter) {
+        return res.status(404).json({ success: false, message: 'Letter record not found' });
+      }
+
+      let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
+      const cand = meta.candidate_details || {};
+
+      const email = cand.email || letter.candidate_email || letter.issuedTo?.email;
+      if (!email) {
+        return res.status(400).json({ success: false, message: 'Candidate email address is missing' });
+      }
+
+      const candidate_name = cand.name || letter.candidate_name || letter.issuedTo?.name || 'Candidate';
+      const phone = cand.phone || letter.candidate_phone || letter.issuedTo?.phone || null;
+      const designation = cand.designation || letter.issuedTo?.designation || null;
+      const department = cand.department || letter.issuedTo?.department || null;
+      const fixed_gross = parseFloat(cand.fixed_gross || letter.issuedTo?.fixed_gross || 0);
+
+      let company_id = cand.company_id || letter.issuedTo?.company_id || null;
+      if (!company_id && cand.company) {
+        const comp = await Company.findOne({ where: { name: cand.company } });
+        if (comp) company_id = comp.id;
+      }
+
+      let office_id = cand.office_id || letter.issuedTo?.office_id || null;
+      if (!office_id && cand.office) {
+        const off = await Office.findOne({ where: { name: cand.office } });
+        if (off) office_id = off.id;
+      }
+
+      // Create and send official onboarding invitation email
+      const inviteResult = await onboardingInvitationService.createInvitation({
+        email: email.trim(),
+        candidate_name,
+        phone,
+        designation,
+        department,
+        office_id,
+        company_id,
+        fixed_gross,
+        expiry_days: 7,
+        send_email: true, // Auto-send onboarding email!
+      }, req.employee ? req.employee.id : null);
+
+      meta = {
+        ...meta,
+        onboarding_invited: true,
+        onboarding_link: inviteResult.link,
+        onboarding_invitation_id: inviteResult.invitation?.id,
+        onboarding_invited_at: new Date().toISOString(),
+      };
+
+      await letter.update({ metadata: meta });
+
+      return success(res, `Self-onboarding portal link sent successfully to ${candidate_name} (${email})!`, {
+        link: inviteResult.link,
+        invitation_id: inviteResult.invitation?.id,
+        reissued: inviteResult.reissued || false,
+      }, 200);
+    } catch (err) {
+      logger.error(`Send onboarding invite error: ${err.message}`);
       return next(err);
     }
   }

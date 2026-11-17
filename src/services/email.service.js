@@ -226,8 +226,9 @@ class EmailService {
    * @param {string} [params.customSubject] - Optional subject override
    * @param {string} [params.customNote] - Optional notes from HR
    * @param {string} [params.onboardingLink] - Optional online self-onboarding portal link
+   * @param {string} [params.acceptanceLink] - Optional online offer letter digital acceptance link
    */
-  async sendOfficialLetterEmail({ to, employeeName, empCode = '', letterTitle, letterType, companyName = 'Apaar Logistics & Cold Supply Chain Pvt Ltd', pdfBuffer, customSubject, customNote, onboardingLink }) {
+  async sendOfficialLetterEmail({ to, employeeName, empCode = '', letterTitle, letterType, companyName = 'Apaar Logistics & Cold Supply Chain Pvt Ltd', pdfBuffer, customSubject, customNote, onboardingLink, acceptanceLink }) {
     const subject = customSubject || `${letterTitle} — ${companyName}`;
 
     let letterDescription = '';
@@ -235,12 +236,16 @@ class EmailService {
 
     switch (letterType) {
       case 'offer':
-        letterDescription = onboardingLink
-          ? 'We are pleased to share your official Offer of Employment and invite you to complete your digital joining formalities.'
-          : 'We are pleased to share your official Offer of Employment.';
-        actionInstructions = onboardingLink
-          ? 'Please review the attached Offer Letter PDF for complete compensation breakup and joining terms. To complete your onboarding, click the button below to submit your personal and bank details and upload your KYC documents.'
-          : 'Please review the offered compensation details and joining terms. Kindly confirm your acceptance by replying to this email or acknowledging the offer in the HRMS portal.';
+        if (acceptanceLink) {
+          letterDescription = 'We are pleased to share your official Offer of Employment and invite you to review and digitally sign your offer letter.';
+          actionInstructions = 'Please click the link below to review the complete compensation breakdown, terms of employment, and provide your digital signature to accept this offer.';
+        } else if (onboardingLink) {
+          letterDescription = 'We are pleased to share your official Offer of Employment and invite you to complete your digital joining formalities.';
+          actionInstructions = 'Please review the attached Offer Letter PDF for complete compensation breakup and joining terms. To complete your onboarding, click the button below to submit your personal and bank details and upload your KYC documents.';
+        } else {
+          letterDescription = 'We are pleased to share your official Offer of Employment.';
+          actionInstructions = 'Please review the offered compensation details and joining terms. Kindly confirm your acceptance by replying to this email or acknowledging the offer in the HRMS portal.';
+        }
         break;
       case 'appointment':
         letterDescription = 'We are pleased to issue your formal Appointment Letter confirming your employment.';
@@ -279,6 +284,27 @@ class EmailService {
       ${empCode ? `<p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Employee Code: ${empCode}</p>` : ''}
       <p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Date of Issue: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
     </div>
+
+    ${acceptanceLink ? `
+      <div style="background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border: 1.5px solid #2563eb; padding: 22px 24px; margin: 22px 0; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);">
+        <div style="display: inline-block; background: #dbeafe; color: #1e40af; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 10px;">
+          ✍️ Digital Offer Acceptance Portal
+        </div>
+        <h3 style="margin: 0 0 8px; color: #0f172a; font-size: 17px; font-weight: 800;">Review &amp; Digitally Sign Your Offer</h3>
+        <p style="margin: 0 0 18px; font-size: 13.5px; color: #475569; line-height: 1.55; max-width: 480px; margin-left: auto; margin-right: auto;">
+          Please review your offered compensation, terms of employment, and sign digitally online to accept this offer. Once accepted, your onboarding portal link will be issued.
+        </p>
+        <a href="${acceptanceLink}" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; padding: 13px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35); letter-spacing: 0.3px;">
+          Review &amp; Digitally Sign Offer &rarr;
+        </a>
+        <p style="margin: 16px 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+          Direct link: <a href="${acceptanceLink}" style="color: #2563eb; word-break: break-all; font-weight: 600;">${acceptanceLink}</a>
+        </p>
+        <p style="margin: 6px 0 0; font-size: 11px; color: #94a3b8;">
+          Note: This unique acceptance link is private, secure, and encrypted.
+        </p>
+      </div>
+    ` : ''}
 
     ${onboardingLink ? `
       <div style="background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border: 1.5px solid #2563eb; padding: 22px 24px; margin: 22px 0; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);">
@@ -344,6 +370,96 @@ class EmailService {
 
     logger.info(`Official ${letterType} letter email dispatched to registered email ${to} (emp: ${empCode || 'candidate'})`);
     return result;
+  }
+
+  /**
+   * Send notification to HR when candidate digitally accepts the offer letter
+   */
+  async sendOfferAcceptedNotification({ to, candidateName, candidateEmail, designation, companyName, acceptedAt }) {
+    const formattedDate = new Date(acceptedAt || Date.now()).toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+        <div style="background-color: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h2 style="color: #22c55e; margin: 0; font-size: 20px;">✓ Offer Accepted &amp; Digitally Signed</h2>
+          <p style="color: #94a3b8; margin: 6px 0 0; font-size: 13px;">${companyName} — HR Recruitment Portal</p>
+        </div>
+        <div style="padding: 24px 8px;">
+          <p style="font-size: 15px; color: #334155; margin-top: 0;">Hello HR Team,</p>
+          <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+            Great news! Candidate <strong>${candidateName}</strong> has reviewed and <strong>digitally accepted</strong> the Offer of Employment for the position of <strong>${designation}</strong>.
+          </p>
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 13px; color: #166534;"><strong>Candidate:</strong> ${candidateName}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Email:</strong> ${candidateEmail}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Role:</strong> ${designation}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Accepted At:</strong> ${formattedDate}</p>
+          </div>
+          <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+            You can now log in to the HRMS portal and click <strong>"Send Onboarding Link"</strong> with 1-click to invite the candidate to complete their digital KYC and bank account submission.
+          </p>
+        </div>
+        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; ${new Date().getFullYear()} ${companyName}. Automated HRMS Notification.
+        </div>
+      </div>
+    `;
+
+    return this.sendMail({
+      to,
+      subject: `✓ Offer Accepted: ${candidateName} has digitally signed the offer for ${designation}`,
+      html,
+    });
+  }
+
+  /**
+   * Send notification to HR when candidate declines the offer letter
+   */
+  async sendOfferRejectedNotification({ to, candidateName, candidateEmail, designation, companyName, rejectedAt, reason }) {
+    const formattedDate = new Date(rejectedAt || Date.now()).toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+        <div style="background-color: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h2 style="color: #ef4444; margin: 0; font-size: 20px;">Offer Declined by Candidate</h2>
+          <p style="color: #94a3b8; margin: 6px 0 0; font-size: 13px;">${companyName} — HR Recruitment Portal</p>
+        </div>
+        <div style="padding: 24px 8px;">
+          <p style="font-size: 15px; color: #334155; margin-top: 0;">Hello HR Team,</p>
+          <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+            Candidate <strong>${candidateName}</strong> has declined the Offer of Employment for the position of <strong>${designation}</strong>.
+          </p>
+          <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 13px; color: #991b1b;"><strong>Candidate:</strong> ${candidateName}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #991b1b;"><strong>Email:</strong> ${candidateEmail}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #991b1b;"><strong>Role:</strong> ${designation}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #991b1b;"><strong>Declined At:</strong> ${formattedDate}</p>
+            ${reason ? `<p style="margin: 6px 0 0; font-size: 13px; color: #991b1b;"><strong>Candidate Remarks:</strong> ${reason}</p>` : ''}
+          </div>
+        </div>
+        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; ${new Date().getFullYear()} ${companyName}. Automated HRMS Notification.
+        </div>
+      </div>
+    `;
+
+    return this.sendMail({
+      to,
+      subject: `Offer Declined: ${candidateName} has declined the offer for ${designation}`,
+      html,
+    });
   }
 }
 

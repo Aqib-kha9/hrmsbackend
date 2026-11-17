@@ -6,7 +6,12 @@ const letterController = require('../controllers/letter.controller');
 const offerLetterController = require('../controllers/offer_letter.controller');
 const letterTemplateController = require('../controllers/letter_template.controller');
 
-// All routes require authentication
+// ── Public Offer Letter Acceptance routes (Candidate facing, no auth required) ──
+router.get('/public/offer/:token', letterController.getPublicOfferLetter);
+router.post('/public/offer/:token/respond', letterController.respondPublicOfferLetter);
+router.get('/public/offer/:token/pdf', letterController.downloadPublicOfferLetterPDF);
+
+// All routes below require authentication
 router.use(authenticate);
 
 // ── Employee routes ──
@@ -25,6 +30,7 @@ router.get('/generate-pdf', requirePermission('letters:read'), letterController.
 router.post('/generate-pdf', requirePermission('letters:create'), letterController.generateLetterPDF);
 router.post('/send-email', requirePermission('letters:create'), letterController.sendLetterEmail);
 router.post('/:id/send-email', requirePermission('letters:create'), letterController.sendExistingLetterEmail);
+router.post('/:id/send-onboarding-invite', requirePermission('letters:create'), letterController.sendOnboardingInvite);
 
 // ── Offer letter specific routes (Admin/HR only) ──
 router.get('/offer-letter/:employeeId/preview', requirePermission('letters:read'), offerLetterController.previewOfferLetter);
