@@ -148,6 +148,49 @@ class LetterController {
       });
 
       if (recordLetter === true || recordLetter === 'true') {
+        let onboardingLink = null;
+        let onboardingInvitation = null;
+
+        if (params.includeOnboarding && candidateData && candidateData.email) {
+          try {
+            const onboardingInvitationService = require('../services/onboarding_invitation.service');
+            let company_id = candidateData.company_id || null;
+            if (!company_id && candidateData.company) {
+              const comp = await Company.findOne({ where: { name: candidateData.company } });
+              if (comp) company_id = comp.id;
+            }
+            let office_id = candidateData.office_id || null;
+            if (!office_id && candidateData.office) {
+              const off = await Office.findOne({ where: { name: candidateData.office } });
+              if (off) office_id = off.id;
+            }
+
+            const inviteResult = await onboardingInvitationService.createInvitation({
+              email: candidateData.email.trim(),
+              candidate_name: candidateData.name || null,
+              phone: candidateData.phone || null,
+              designation: candidateData.designation || null,
+              department: candidateData.department || null,
+              office_id,
+              company_id,
+              fixed_gross: parseFloat(candidateData.fixed_gross) || 0,
+              expiry_days: 7,
+              send_email: false,
+            }, req.employee ? req.employee.id : null);
+
+            onboardingInvitation = inviteResult.invitation;
+            onboardingLink = inviteResult.link;
+          } catch (e) {
+            logger.warn(`Could not create onboarding invitation during PDF recording: ${e.message}`);
+          }
+        }
+
+        const letterMetadata = {
+          candidate_details: candidateData || null,
+          onboarding_link: onboardingLink || null,
+          onboarding_invitation_id: onboardingInvitation ? onboardingInvitation.id : null,
+        };
+
         let letterRecord = null;
         if (resolvedEmployeeId) {
           letterRecord = await letterService.issueLetter({
@@ -158,6 +201,7 @@ class LetterController {
             issued_date: new Date(),
             status: 'issued',
             signatory_id: resolvedSignatoryId || null,
+            metadata: letterMetadata,
           }, req.employee ? req.employee.id : null);
         } else if (candidateData) {
           letterRecord = await letterService.issueLetter({
@@ -171,11 +215,15 @@ class LetterController {
             issued_date: new Date(),
             status: 'issued',
             signatory_id: resolvedSignatoryId || null,
+            metadata: letterMetadata,
           }, req.employee ? req.employee.id : null);
         }
         if (letterRecord) {
           res.setHeader('X-Letter-Id', String(letterRecord.id));
-          res.setHeader('Access-Control-Expose-Headers', 'X-Letter-Id');
+          if (onboardingLink) {
+            res.setHeader('X-Onboarding-Link', encodeURIComponent(onboardingLink));
+          }
+          res.setHeader('Access-Control-Expose-Headers', 'X-Letter-Id, X-Onboarding-Link');
         }
       }
 
@@ -191,7 +239,7 @@ class LetterController {
 
   async sendLetterEmail(req, res, next) {
     try {
-      const { templateId, template_id, employeeId, employee_id, content, fullHtml, title: bodyTitle, type: bodyType, subject, candidateData, signatoryId, signatory_id } = req.body;
+      const { templateId, template_id, employeeId, employee_id, content, fullHtml, title: bodyTitle, type: bodyType, subject, candidateData, signatoryId, signatory_id, includeOnboarding } = req.body;
       const resolvedTemplateId = templateId || template_id;
       const resolvedEmployeeId = employeeId || employee_id;
       const resolvedSignatoryId = signatoryId || signatory_id || null;
@@ -255,6 +303,47 @@ class LetterController {
         }
       }
 
+      // ── Integrated Self-Onboarding Invitation (Optional / Combined) ──
+      let onboardingLink = null;
+      let onboardingInvitation = null;
+
+      if (includeOnboarding && candidateData && candidateData.email) {
+        try {
+          const onboardingInvitationService = require('../services/onboarding_invitation.service');
+          
+          let company_id = candidateData.company_id || null;
+          if (!company_id && candidateData.company) {
+            const comp = await Company.findOne({ where: { name: candidateData.company } });
+            if (comp) company_id = comp.id;
+          }
+          let office_id = candidateData.office_id || null;
+          if (!office_id && candidateData.office) {
+            const off = await Office.findOne({ where: { name: candidateData.office } });
+            if (off) office_id = off.id;
+          }
+
+          const inviteResult = await onboardingInvitationService.createInvitation({
+            email: candidateData.email.trim(),
+            candidate_name: candidateData.name || null,
+            phone: candidateData.phone || null,
+            designation: candidateData.designation || null,
+            department: candidateData.department || null,
+            office_id,
+            company_id,
+            fixed_gross: parseFloat(candidateData.fixed_gross) || 0,
+            expiry_days: 7,
+            send_email: false, // Sent inside official letter email
+          }, req.employee ? req.employee.id : null);
+
+          onboardingInvitation = inviteResult.invitation;
+          onboardingLink = inviteResult.link;
+          logger.info(`Onboarding invitation created/reused for ${candidateData.email}: ${onboardingLink}`);
+        } catch (inviteErr) {
+          logger.error(`Error generating onboarding invitation for ${candidateData.email}: ${inviteErr.message}`);
+          throw inviteErr;
+        }
+      }
+
       // Generate PDF
       const pdfBuffer = await letterPdfService.generateLetterPDF({
         content: content || '',
@@ -266,6 +355,12 @@ class LetterController {
       });
 
       let letterId = null;
+      const letterMetadata = {
+        candidate_details: candidateData || null,
+        onboarding_link: onboardingLink || null,
+        onboarding_invitation_id: onboardingInvitation ? onboardingInvitation.id : null,
+      };
+
       if (resolvedEmployeeId) {
         const letter = await letterService.issueLetter({
           employee_id: resolvedEmployeeId,
@@ -275,6 +370,7 @@ class LetterController {
           issued_date: new Date(),
           status: 'issued',
           signatory_id: resolvedSignatoryId,
+          metadata: letterMetadata,
         }, req.employee ? req.employee.id : null);
         letterId = letter.id;
       } else if (candidateData) {
@@ -289,6 +385,7 @@ class LetterController {
           issued_date: new Date(),
           status: 'issued',
           signatory_id: resolvedSignatoryId,
+          metadata: letterMetadata,
         }, req.employee ? req.employee.id : null);
         letterId = letter.id;
       }
@@ -304,11 +401,14 @@ class LetterController {
         companyName,
         pdfBuffer,
         customSubject: subject,
+        onboardingLink,
       });
 
       return success(res, `Letter sent successfully to registered email (${employee.email})`, {
         letter_id: letterId,
         recipient_email: employee.email,
+        onboarding_link: onboardingLink,
+        onboarding_id: onboardingInvitation?.id,
         email_accepted: emailResult.accepted,
         email_rejected: emailResult.rejected,
       }, 200);
@@ -380,6 +480,7 @@ class LetterController {
         pdfBuffer,
         customSubject: subject,
         customNote: custom_note,
+        onboardingLink: letter.metadata?.onboarding_link || undefined,
       });
 
       if (letter.status === 'draft') {
@@ -389,6 +490,7 @@ class LetterController {
       return success(res, `Letter dispatched successfully to registered email (${targetEmail})`, {
         letter_id: letter.id,
         recipient_email: targetEmail,
+        onboarding_link: letter.metadata?.onboarding_link || null,
         email_accepted: emailResult.accepted,
         email_rejected: emailResult.rejected,
       }, 200);

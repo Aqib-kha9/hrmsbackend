@@ -225,8 +225,9 @@ class EmailService {
    * @param {Buffer} params.pdfBuffer - Generated PDF attachment buffer
    * @param {string} [params.customSubject] - Optional subject override
    * @param {string} [params.customNote] - Optional notes from HR
+   * @param {string} [params.onboardingLink] - Optional online self-onboarding portal link
    */
-  async sendOfficialLetterEmail({ to, employeeName, empCode = '', letterTitle, letterType, companyName = 'Apaar Logistics & Cold Supply Chain Pvt Ltd', pdfBuffer, customSubject, customNote }) {
+  async sendOfficialLetterEmail({ to, employeeName, empCode = '', letterTitle, letterType, companyName = 'Apaar Logistics & Cold Supply Chain Pvt Ltd', pdfBuffer, customSubject, customNote, onboardingLink }) {
     const subject = customSubject || `${letterTitle} — ${companyName}`;
 
     let letterDescription = '';
@@ -234,8 +235,12 @@ class EmailService {
 
     switch (letterType) {
       case 'offer':
-        letterDescription = 'We are pleased to share your official Offer of Employment.';
-        actionInstructions = 'Please review the offered compensation details and joining terms. Kindly confirm your acceptance by replying to this email or acknowledging the offer in the HRMS portal.';
+        letterDescription = onboardingLink
+          ? 'We are pleased to share your official Offer of Employment and invite you to complete your digital joining formalities.'
+          : 'We are pleased to share your official Offer of Employment.';
+        actionInstructions = onboardingLink
+          ? 'Please review the attached Offer Letter PDF for complete compensation breakup and joining terms. To complete your onboarding, click the button below to submit your personal and bank details and upload your KYC documents.'
+          : 'Please review the offered compensation details and joining terms. Kindly confirm your acceptance by replying to this email or acknowledging the offer in the HRMS portal.';
         break;
       case 'appointment':
         letterDescription = 'We are pleased to issue your formal Appointment Letter confirming your employment.';
@@ -274,6 +279,27 @@ class EmailService {
       ${empCode ? `<p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Employee Code: ${empCode}</p>` : ''}
       <p style="margin: 4px 0 0; font-size: 12px; color: #64748b;">Date of Issue: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
     </div>
+
+    ${onboardingLink ? `
+      <div style="background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border: 1.5px solid #2563eb; padding: 22px 24px; margin: 22px 0; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);">
+        <div style="display: inline-block; background: #dbeafe; color: #1e40af; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 10px;">
+          🚀 Online Self-Onboarding Portal
+        </div>
+        <h3 style="margin: 0 0 8px; color: #0f172a; font-size: 17px; font-weight: 800;">Complete Your Employee Onboarding</h3>
+        <p style="margin: 0 0 18px; font-size: 13.5px; color: #475569; line-height: 1.55; max-width: 480px; margin-left: auto; margin-right: auto;">
+          Submit your personal profile, bank account details for payroll, and upload required KYC documents (Aadhaar, PAN, Education certificates) securely online.
+        </p>
+        <a href="${onboardingLink}" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; padding: 13px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35); letter-spacing: 0.3px;">
+          Start Self-Onboarding Now &rarr;
+        </a>
+        <p style="margin: 16px 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+          Direct link: <a href="${onboardingLink}" style="color: #2563eb; word-break: break-all; font-weight: 600;">${onboardingLink}</a>
+        </p>
+        <p style="margin: 6px 0 0; font-size: 11px; color: #94a3b8;">
+          Note: This unique onboarding link is secure and valid for 7 days.
+        </p>
+      </div>
+    ` : ''}
 
     ${customNote ? `
       <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 12px 16px; margin: 16px 0; border-radius: 6px; font-size: 13px; color: #92400e;">
