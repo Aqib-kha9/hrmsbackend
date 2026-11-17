@@ -1,4 +1,4 @@
-const { PayrollCycle, PayrollEntry, Employee, SalaryStructure, Office, Company, Payslip, SalaryComponent, sequelize } = require('../models');
+const { PayrollCycle, PayrollEntry, Employee, SalaryStructure, Office, Company, Payslip, SalaryComponent, AttendanceRecord, sequelize } = require('../models');
 const { AppError } = require('../middleware/error.middleware');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
@@ -773,13 +773,198 @@ class PayrollLedgerService {
     };
   }
 
-  async getEmployeeHistory(employeeId, { year } = {}) {
-    const where = { employee_id: employeeId };
+  _getEmployeeWeeklyOffDays(emp, fallbackWeekendDays = [0]) {
+    if (!emp || emp.weekly_off_days === undefined || emp.weekly_off_days === null) {
+      return fallbackWeekendDays;
+    }
+    let offs = emp.weekly_off_days;
+    if (typeof offs === 'string') {
+      try {
+        offs = JSON.parse(offs);
+      } catch (e) {
+        offs = offs.split(',').map(s => s.trim()).filter(Boolean);
+      }
+    }
+    if (!Array.isArray(offs)) {
+      return fallbackWeekendDays;
+    }
+    if (offs.length === 0) {
+      return [];
+    }
+    const dayMap = {
+      'sunday': 0, 'sun': 0, '0': 0,
+      'monday': 1, 'mon': 1, '1': 1,
+      'tuesday': 2, 'tue': 2, '2': 2,
+      'wednesday': 3, 'wed': 3, '3': 3,
+      'thursday': 4, 'thu': 4, '4': 4,
+      'friday': 5, 'fri': 5, '5': 5,
+      'saturday': 6, 'sat': 6, '6': 6,
+    };
+    const resolved = offs
+      .map(d => {
+        if (typeof d === 'number') return d;
+        return dayMap[String(d).toLowerCase().trim()];
+      })
+      .filter(n => n !== undefined);
+    return resolved;
+  }
+
+  async getEmployeeHistory(employeeId, { year, days, from, to } = {}) {
+    const emp = await Employee.findByPk(employeeId, {
+      include: [
+        { model: Office, as: 'office' },
+        { model: Company, as: 'company' }
+      ]
+    });
+    if (!emp) throw new AppError('Employee not found', 404);
+
+    const fixedGross = Number(emp.fixed_gross) || 0;
+    // Standard 30 days divisor for daily rate calculation
+    const dailyRate = Math.round(fixedGross / 30);
+    const hourlyRate = Math.round(dailyRate / 9);
+
+    const fixedBasic = Math.round(fixedGross * 0.50);
+    const hraApplicable = emp.hra_applicable !== false;
+    const fixedHra = hraApplicable ? Math.round(fixedBasic * 0.40) : 0;
+    const fixedConv = Number(emp.conveyance) || 0;
+    const fixedMed = Number(emp.medical_allowance) || 0;
+    const fixedSpec = Number(emp.special_allowance) || 0;
+    const fixedPerf = Number(emp.performance_allowance) || 0;
+    const fixedOther = Math.max(0, fixedGross - (fixedBasic + fixedHra + fixedConv + fixedMed + fixedSpec + fixedPerf));
+
+    // ── Determine Date Range (previous X days or custom from/to) ──
+    let startDate, endDate;
+    if (from && to) {
+      startDate = new Date(from);
+      endDate = new Date(to);
+    } else {
+      const numDays = parseInt(days) || 30;
+      endDate = new Date();
+      startDate = new Date();
+      startDate.setDate(endDate.getDate() - (numDays - 1));
+    }
+
+    const formatDateStr = (d) => {
+      const yr = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      return `${yr}-${mo}-${da}`;
+    };
+
+    const fromStr = formatDateStr(startDate);
+    const toStr = formatDateStr(endDate);
+
+    // ── Attendance Query for the Range ──
+    const attendanceRecords = await AttendanceRecord.findAll({
+      where: {
+        employee_id: employeeId,
+        date: {
+          [Op.gte]: fromStr,
+          [Op.lte]: toStr,
+        }
+      },
+      order: [['date', 'ASC']]
+    });
+
+    const recordMap = {};
+    attendanceRecords.forEach(rec => {
+      recordMap[rec.date] = rec;
+    });
+
+    const offDayIndices = this._getEmployeeWeeklyOffDays(emp);
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const fullDayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    const todayStr = formatDateStr(new Date());
+    const timeline = [];
+
+    let current = new Date(startDate);
+    let iteration = 0;
+    const maxIterations = 730;
+
+    while (current <= endDate && iteration < maxIterations) {
+      iteration++;
+      const dateStr = formatDateStr(current);
+      const dayIdx = current.getDay();
+      const dayName = dayNames[dayIdx];
+      const fullDay = fullDayNames[dayIdx];
+      const isOff = offDayIndices.includes(dayIdx);
+      const rec = recordMap[dateStr];
+      const isPastOrToday = dateStr <= todayStr;
+
+      let status = 'absent';
+      let payableCredit = 0;
+      let checkIn = null;
+      let checkOut = null;
+      let hours = 0;
+      let lateMinutes = 0;
+      let outdoor = false;
+
+      if (rec) {
+        status = rec.status;
+        checkIn = rec.check_in_time;
+        checkOut = rec.check_out_time;
+        hours = Number(rec.total_hours) || 0;
+        lateMinutes = rec.late_by_minutes || 0;
+        outdoor = !!rec.is_outdoor;
+
+        if (status === 'present' || status === 'late' || status === 'tour') {
+          payableCredit = 1.0;
+        } else if (status === 'half_day') {
+          payableCredit = 0.5;
+        } else if (status === 'weekend' || status === 'holiday') {
+          payableCredit = 1.0;
+        } else {
+          payableCredit = 0;
+        }
+      } else {
+        if (isOff) {
+          status = 'weekend';
+          payableCredit = 1.0;
+        } else if (!isPastOrToday) {
+          status = 'scheduled';
+          payableCredit = 0;
+        } else {
+          status = 'absent';
+          payableCredit = 0;
+        }
+      }
+
+      const dailyEarned = Math.round(payableCredit * dailyRate);
+
+      timeline.push({
+        date: dateStr,
+        day: dayName,
+        fullDay,
+        status,
+        payableCredit,
+        dailyEarned,
+        checkIn,
+        checkOut,
+        totalHours: hours,
+        lateMinutes,
+        isOutdoor: outdoor,
+        isWeeklyOff: isOff
+      });
+
+      current.setDate(current.getDate() + 1);
+    }
+
+    const presentCount = timeline.filter(t => t.status === 'present' || t.status === 'late' || t.status === 'tour').length;
+    const halfDayCount = timeline.filter(t => t.status === 'half_day').length;
+    const weeklyOffCount = timeline.filter(t => t.status === 'weekend').length;
+    const holidayCount = timeline.filter(t => t.status === 'holiday').length;
+    const absentCount = timeline.filter(t => t.status === 'absent').length;
+    const rangePayableDays = timeline.reduce((acc, t) => acc + t.payableCredit, 0);
+    const totalHoursLogged = timeline.reduce((acc, t) => acc + (t.totalHours || 0), 0);
+    const periodGrossEarned = Math.round(rangePayableDays * dailyRate);
+
+    // ── Historical Payroll Cycles ──
     const cycleWhere = {};
     if (year) cycleWhere.year = parseInt(year);
 
     const entries = await PayrollEntry.findAll({
-      where,
+      where: { employee_id: employeeId },
       include: [{
         model: PayrollCycle,
         as: 'cycle',
@@ -798,25 +983,24 @@ class PayrollLedgerService {
     const history = await Promise.all(entries.map(async (entry) => {
       const cycle = entry.cycle;
       if (!cycle) return null;
-      const emp = entry.employee;
-      if (!emp) return null;
+      const rowEmp = entry.employee || emp;
 
       const { workingDays: dynamicDays } = await this._getDynamicDaysInMonth(cycle.month_index + 1, cycle.year);
 
       const calculation = this._calculateRow({
-        ...emp.toJSON(),
+        ...rowEmp.toJSON(),
         ...entry.toJSON(),
-        fixed_gross: emp.fixed_gross,
-        pf_applicable: emp.pf_applicable,
-        pf_ceiling: emp.pf_ceiling,
-        esic_applicable: emp.esic_applicable,
+        fixed_gross: rowEmp.fixed_gross,
+        pf_applicable: rowEmp.pf_applicable,
+        pf_ceiling: rowEmp.pf_ceiling,
+        esic_applicable: rowEmp.esic_applicable,
       }, dynamicDays);
 
       return {
         id: entry.id,
-        employeeId: emp.id,
-        employeeCode: emp.emp_code,
-        name: emp.name,
+        employeeId: rowEmp.id,
+        employeeCode: rowEmp.emp_code,
+        name: rowEmp.name,
         cycleId: cycle.id,
         month: cycle.month,
         month_index: cycle.month_index,
@@ -828,19 +1012,80 @@ class PayrollLedgerService {
         incentive: Number(entry.incentive) || 0,
         loanDeduction: Number(entry.loan_deduction) || 0,
         otherDeduction: Number(entry.other_deduction) || 0,
-        uan: emp.uan || '--',
-        designation: emp.designation || '',
-        location: emp.location || emp.office?.name || 'Unknown',
-        company: emp.company?.name || emp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
-        bankName: emp.bank_name || '--',
-        bankAccountNumber: emp.bank_account_number || '--',
-        pfNumber: emp.pf_number || '--',
+        uan: rowEmp.uan || '--',
+        designation: rowEmp.designation || '',
+        location: rowEmp.location || rowEmp.office?.name || 'Unknown',
+        company: rowEmp.company?.name || rowEmp.company_name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd',
+        bankName: rowEmp.bank_name || '--',
+        bankAccountNumber: rowEmp.bank_account_number || '--',
+        pfNumber: rowEmp.pf_number || '--',
         workingDays: Math.max(0, dynamicDays - (entry.absent_days || 0)),
         ...calculation,
       };
     }));
 
-    return history.filter(Boolean);
+    const historyList = history.filter(Boolean);
+
+    return {
+      employee: {
+        id: emp.id,
+        emp_code: emp.emp_code,
+        name: emp.name,
+        email: emp.email,
+        phone: emp.phone,
+        designation: emp.designation,
+        department: emp.department,
+        company: emp.company?.name || emp.company_name,
+        office: emp.office?.name || emp.location,
+        avatar: emp.avatar,
+        fixed_gross: fixedGross,
+        basic_salary: emp.basic_salary,
+        dailyRate,
+        hourlyRate,
+        salaryBreakup: {
+          basic: fixedBasic,
+          hra: fixedHra,
+          conveyance: fixedConv,
+          medical: fixedMed,
+          special: fixedSpec,
+          performance: fixedPerf,
+          other: fixedOther
+        },
+        pf_applicable: emp.pf_applicable,
+        pf_ceiling: emp.pf_ceiling,
+        esic_applicable: emp.esic_applicable,
+        pt_applicable: emp.pt_applicable,
+        weekly_off_days: emp.weekly_off_days,
+        weekly_off_type: emp.weekly_off_type,
+        bank_name: emp.bank_name,
+        bank_account_number: emp.bank_account_number,
+        ifsc_code: emp.ifsc_code,
+        pan_number: emp.pan_number,
+        uan: emp.uan,
+        pf_number: emp.pf_number,
+        esic_number: emp.esic_number,
+        shift_preset: emp.shift_preset,
+        shift_start_time: emp.shift_start_time,
+        shift_end_time: emp.shift_end_time
+      },
+      periodAnalysis: {
+        from: fromStr,
+        to: toStr,
+        daysCount: timeline.length,
+        payableDays: Number(rangePayableDays.toFixed(1)),
+        presentDays: presentCount,
+        halfDays: halfDayCount,
+        absentDays: absentCount,
+        weeklyOffDays: weeklyOffCount,
+        holidayDays: holidayCount,
+        totalHoursLogged: Number(totalHoursLogged.toFixed(2)),
+        dailyRate,
+        hourlyRate,
+        periodGrossEarned,
+        timeline: timeline.slice().reverse()
+      },
+      history: historyList
+    };
   }
 
   // ── API: PATCH /payroll/entry/:entryId — update a single entry ──
