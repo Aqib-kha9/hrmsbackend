@@ -98,12 +98,9 @@ const weeklyOffConfigSchema = Joi.object({
     Joi.alternatives().try(Joi.string().trim(), Joi.number().integer().positive())
   ).optional(),
   weekly_off_days: Joi.alternatives().try(
-    Joi.array().items(Joi.string().trim()).min(1),
-    Joi.string().trim()
-  ).optional()
-    .messages({
-      'any.required': 'Weekly off days selection is required',
-    }),
+    Joi.array().items(Joi.string().trim()),
+    Joi.string().trim().allow('')
+  ).optional(),
   rotational_weekly_off: Joi.boolean().optional(),
   weekly_off_type: Joi.string().valid('fixed', 'rotational').optional(),
   shift_start_time: Joi.string().allow('', null).optional(),

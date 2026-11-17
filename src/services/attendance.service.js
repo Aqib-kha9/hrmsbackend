@@ -50,7 +50,7 @@ async function _getWeekendDays() {
  * Supports rotational and fixed weekly-off days (Req 2.5 C).
  */
 function getEmployeeWeeklyOffDays(emp, fallbackWeekendDays = [0]) {
-  if (!emp || !emp.weekly_off_days) {
+  if (!emp || emp.weekly_off_days === undefined || emp.weekly_off_days === null) {
     return fallbackWeekendDays;
   }
   let offs = emp.weekly_off_days;
@@ -58,11 +58,15 @@ function getEmployeeWeeklyOffDays(emp, fallbackWeekendDays = [0]) {
     try {
       offs = JSON.parse(offs);
     } catch (e) {
-      offs = offs.split(',').map(s => s.trim());
+      offs = offs.split(',').map(s => s.trim()).filter(Boolean);
     }
   }
-  if (!Array.isArray(offs) || offs.length === 0) {
+  if (!Array.isArray(offs)) {
     return fallbackWeekendDays;
+  }
+  // Explicitly configured 0 weekly off days (7-day continuous working schedule)
+  if (offs.length === 0) {
+    return [];
   }
   const dayMap = {
     'sunday': 0, 'sun': 0, '0': 0,
@@ -79,7 +83,7 @@ function getEmployeeWeeklyOffDays(emp, fallbackWeekendDays = [0]) {
       return dayMap[String(d).toLowerCase().trim()];
     })
     .filter(n => n !== undefined);
-  return resolved.length > 0 ? resolved : fallbackWeekendDays;
+  return resolved;
 }
 
 /**
@@ -1749,9 +1753,7 @@ class AttendanceService {
       // Auto-sync weekly_off_days from day-wise schedule if not explicitly given
       if (weekly_shift_schedule && typeof weekly_shift_schedule === 'object' && weekly_off_days === undefined) {
         const offDays = Object.keys(weekly_shift_schedule).filter(day => weekly_shift_schedule[day]?.is_off);
-        if (offDays.length > 0) {
-          updatePayload.weekly_off_days = offDays;
-        }
+        updatePayload.weekly_off_days = offDays;
       }
       // If primary shift times not explicitly passed, sync from Monday or first working day
       if (weekly_shift_schedule && typeof weekly_shift_schedule === 'object') {
@@ -1776,11 +1778,11 @@ class AttendanceService {
         try {
           formattedDays = JSON.parse(formattedDays);
         } catch (e) {
-          formattedDays = formattedDays.split(',').map(s => s.trim());
+          formattedDays = formattedDays.split(',').map(s => s.trim()).filter(Boolean);
         }
       }
       if (!Array.isArray(formattedDays)) {
-        formattedDays = [formattedDays];
+        formattedDays = formattedDays ? [formattedDays] : [];
       }
       updatePayload.weekly_off_days = formattedDays;
     }
