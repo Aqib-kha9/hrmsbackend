@@ -6,10 +6,18 @@ const letterController = require('../controllers/letter.controller');
 const offerLetterController = require('../controllers/offer_letter.controller');
 const letterTemplateController = require('../controllers/letter_template.controller');
 
-// ── Public Offer Letter Acceptance routes (Candidate facing, no auth required) ──
+// ── Public Letter Digital Acceptance routes (Candidate / Employee facing, no auth required) ──
 router.get('/public/offer/:token', letterController.getPublicOfferLetter);
 router.post('/public/offer/:token/respond', letterController.respondPublicOfferLetter);
 router.get('/public/offer/:token/pdf', letterController.downloadPublicOfferLetterPDF);
+
+router.get('/public/appointment/:token', letterController.getPublicAppointmentLetter);
+router.post('/public/appointment/:token/respond', letterController.respondPublicAppointmentLetter);
+router.get('/public/appointment/:token/pdf', letterController.downloadPublicAppointmentLetterPDF);
+
+router.get('/public/letter/:token', letterController.getPublicLetter);
+router.post('/public/letter/:token/respond', letterController.respondPublicLetter);
+router.get('/public/letter/:token/pdf', letterController.downloadPublicLetterPDF);
 
 // All routes below require authentication
 router.use(authenticate);
@@ -22,6 +30,7 @@ router.patch('/my/:id/acknowledge', letterController.acknowledgeLetter);
 // ── Admin/HR letter routes ──
 router.get('/', requirePermission('letters:read'), letterController.getAllLetters);
 router.post('/issue', requirePermission('letters:create'), letterController.issueLetter);
+router.post('/appointment/issue-and-send', requirePermission('letters:create'), letterController.issueAndSendAppointmentLetter);
 router.patch('/:id', requirePermission('letters:update'), letterController.updateLetter);
 router.delete('/:id', requirePermission('letters:delete'), letterController.deleteLetter);
 

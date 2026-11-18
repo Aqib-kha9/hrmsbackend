@@ -1,8 +1,9 @@
 const crypto = require('crypto');
 const letterService = require('../services/letter.service');
 const letterPdfService = require('../services/letter_pdf.service');
+const letterTemplateService = require('../services/letter_template.service');
 const emailService = require('../services/email.service');
-const { Letter, LetterTemplate, Employee, Office, Company, AuthorisedSignatory, Role, sequelize } = require('../models');
+const { Letter, LetterTemplate, Employee, Office, Company, AuthorisedSignatory, Role, OnboardingInvitation, sequelize } = require('../models');
 const { success, paginated } = require('../utils/response');
 const logger = require('../utils/logger');
 const env = require('../config/env');
@@ -375,15 +376,18 @@ class LetterController {
         }
       }
 
-      // ── Digital Offer Acceptance Link generation ──
+      // ── Digital Acceptance Link generation for Offer & Appointment letters ──
       const isOfferLetter = type === 'offer' || bodyType === 'offer' || !!candidateData;
+      const isAppointmentLetter = type === 'appointment' || bodyType === 'appointment';
+      const requiresDigitalSignature = isOfferLetter || isAppointmentLetter;
       let acceptanceToken = null;
       let acceptanceLink = null;
       const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
 
-      if (isOfferLetter) {
+      if (requiresDigitalSignature) {
         acceptanceToken = crypto.randomBytes(32).toString('hex');
-        acceptanceLink = `${frontendUrl}/offer-acceptance?token=${acceptanceToken}`;
+        const pagePath = isAppointmentLetter ? 'appointment-acceptance' : 'offer-acceptance';
+        acceptanceLink = `${frontendUrl}/${pagePath}?token=${acceptanceToken}`;
       }
 
       // Generate PDF
@@ -403,7 +407,7 @@ class LetterController {
         onboarding_invitation_id: null,
         onboarding_invited: false,
         acceptance_token: acceptanceToken,
-        acceptance_status: isOfferLetter ? 'pending' : null,
+        acceptance_status: requiresDigitalSignature ? 'pending' : null,
         candidate_signature: null,
         signed_name: null,
         accepted_at: null,
@@ -505,17 +509,20 @@ class LetterController {
 
       // Digital offer acceptance link
       const isOfferLetter = letter.type === 'offer';
+      const isAppointmentLetter = letter.type === 'appointment';
+      const requiresDigitalSignature = isOfferLetter || isAppointmentLetter;
       let acceptanceLink = null;
       const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
 
-      if (isOfferLetter) {
+      if (requiresDigitalSignature) {
         let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
         if (!meta.acceptance_token) {
           meta.acceptance_token = crypto.randomBytes(32).toString('hex');
           meta.acceptance_status = meta.acceptance_status || 'pending';
           await letter.update({ metadata: meta });
         }
-        acceptanceLink = `${frontendUrl}/offer-acceptance?token=${meta.acceptance_token}`;
+        const pagePath = isAppointmentLetter ? 'appointment-acceptance' : 'offer-acceptance';
+        acceptanceLink = `${frontendUrl}/${pagePath}?token=${meta.acceptance_token}`;
       }
 
       // Generate PDF
@@ -567,9 +574,9 @@ class LetterController {
   }
 
   /**
-   * Public: Retrieve offer letter details by digital acceptance token
+   * Generic Public: Retrieve any letter details (offer or appointment) by digital acceptance token
    */
-  async getPublicOfferLetter(req, res, next) {
+  async getPublicLetter(req, res, next) {
     try {
       const { token } = req.params;
       if (!token) {
@@ -578,7 +585,7 @@ class LetterController {
 
       const letter = await findLetterByAcceptanceToken(token);
       if (!letter) {
-        return res.status(404).json({ success: false, message: 'Offer letter not found or link has expired' });
+        return res.status(404).json({ success: false, message: 'Letter not found or link has expired' });
       }
 
       const meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
@@ -589,11 +596,13 @@ class LetterController {
       const candidatePhone = letter.candidate_phone || letter.issuedTo?.phone || candidateInfo.phone || '';
       const designation = candidateInfo.designation || letter.issuedTo?.designation || 'Specialist';
       const department = candidateInfo.department || letter.issuedTo?.department || 'Operations';
-      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'Apaar Logistics & Cold Supply Chain Pvt Ltd';
+      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'BP Marketing';
       const officeName = candidateInfo.office || letter.issuedTo?.office?.name || 'Head Office';
       const fixedGross = candidateInfo.fixed_gross || letter.issuedTo?.fixed_gross || 0;
+      const dateOfJoining = candidateInfo.date_of_joining || letter.issuedTo?.date_of_joining || null;
+      const empCode = letter.issuedTo?.emp_code || candidateInfo.emp_code || 'NEW';
 
-      return success(res, 'Offer letter retrieved successfully', {
+      return success(res, `${letter.type === 'appointment' ? 'Appointment' : 'Offer'} letter retrieved successfully`, {
         id: letter.id,
         title: letter.title,
         type: letter.type,
@@ -603,6 +612,7 @@ class LetterController {
         acceptance_status: meta.acceptance_status || (letter.status === 'acknowledged' ? 'accepted' : 'pending'),
         candidate: {
           name: candidateName,
+          emp_code: empCode,
           email: candidateEmail,
           phone: candidatePhone,
           designation,
@@ -610,7 +620,7 @@ class LetterController {
           company: companyName,
           office: officeName,
           fixed_gross: fixedGross,
-          date_of_joining: candidateInfo.date_of_joining || null,
+          date_of_joining: dateOfJoining,
         },
         signatory: letter.signatory ? {
           name: letter.signatory.name,
@@ -628,15 +638,23 @@ class LetterController {
         onboarding_invited: !!meta.onboarding_invited,
       }, 200);
     } catch (err) {
-      logger.error(`Get public offer letter error: ${err.message}`);
+      logger.error(`Get public letter error: ${err.message}`);
       return next(err);
     }
   }
 
+  async getPublicOfferLetter(req, res, next) {
+    return this.getPublicLetter(req, res, next);
+  }
+
+  async getPublicAppointmentLetter(req, res, next) {
+    return this.getPublicLetter(req, res, next);
+  }
+
   /**
-   * Public: Accept or decline offer letter with digital signature
+   * Public: Accept or decline letter with digital signature
    */
-  async respondPublicOfferLetter(req, res, next) {
+  async respondPublicLetter(req, res, next) {
     try {
       const { token } = req.params;
       const { action, signature, signed_name, comments, reason } = req.body;
@@ -651,23 +669,24 @@ class LetterController {
 
       const letter = await findLetterByAcceptanceToken(token);
       if (!letter) {
-        return res.status(404).json({ success: false, message: 'Offer letter not found or link has expired' });
+        return res.status(404).json({ success: false, message: 'Letter not found or link has expired' });
       }
 
       let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
 
       if (meta.acceptance_status === 'accepted') {
-        return res.status(400).json({ success: false, message: 'This offer letter has already been accepted and digitally signed' });
+        return res.status(400).json({ success: false, message: `This ${letter.type === 'appointment' ? 'appointment' : 'offer'} letter has already been accepted and digitally signed` });
       }
       if (meta.acceptance_status === 'rejected') {
-        return res.status(400).json({ success: false, message: 'This offer letter has already been declined' });
+        return res.status(400).json({ success: false, message: `This ${letter.type === 'appointment' ? 'appointment' : 'offer'} letter has already been declined` });
       }
 
       const candidateInfo = meta.candidate_details || {};
       const candidateName = signed_name || letter.candidate_name || letter.issuedTo?.name || candidateInfo.name || 'Candidate';
       const candidateEmail = letter.candidate_email || letter.issuedTo?.email || candidateInfo.email || '';
       const designation = candidateInfo.designation || letter.issuedTo?.designation || 'Specialist';
-      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'Apaar Logistics';
+      const companyName = candidateInfo.company || letter.issuedTo?.company?.name || 'BP Marketing';
+      const empCode = letter.issuedTo?.emp_code || candidateInfo.emp_code || '';
 
       // Find HR recipient for notifications
       let hrEmail = null;
@@ -685,7 +704,7 @@ class LetterController {
 
       if (action === 'accept') {
         if (!signature) {
-          return res.status(400).json({ success: false, message: 'Digital signature is required to accept the offer' });
+          return res.status(400).json({ success: false, message: 'Digital signature is required to accept the document' });
         }
 
         const acceptedAt = new Date().toISOString();
@@ -704,21 +723,47 @@ class LetterController {
           acknowledged_at: new Date(),
         });
 
-        // Notify HR via email
-        try {
-          await emailService.sendOfferAcceptedNotification({
-            to: hrEmail,
-            candidateName,
-            candidateEmail,
-            designation,
-            companyName,
-            acceptedAt,
-          });
-        } catch (mailErr) {
-          logger.error(`Failed to send offer accepted notification to HR: ${mailErr.message}`);
+        // Also if linked to an onboarding invitation, update invitation appointment_status
+        if (meta.invitation_id) {
+          try {
+            const inv = await OnboardingInvitation.findByPk(meta.invitation_id);
+            if (inv && inv.submitted_data) {
+              const subData = { ...inv.submitted_data, appointment_status: 'accepted', appointment_signed_at: acceptedAt };
+              inv.submitted_data = subData;
+              await inv.save();
+            }
+          } catch (e) {
+            logger.warn(`Could not update invitation appointment status: ${e.message}`);
+          }
         }
 
-        return success(res, 'Offer letter accepted and digitally signed successfully!', {
+        // Notify HR via email
+        try {
+          if (letter.type === 'appointment') {
+            await emailService.sendAppointmentAcceptedNotification({
+              to: hrEmail,
+              employeeName: candidateName,
+              empCode,
+              employeeEmail: candidateEmail,
+              designation,
+              companyName,
+              acceptedAt,
+            });
+          } else {
+            await emailService.sendOfferAcceptedNotification({
+              to: hrEmail,
+              candidateName,
+              candidateEmail,
+              designation,
+              companyName,
+              acceptedAt,
+            });
+          }
+        } catch (mailErr) {
+          logger.error(`Failed to send acceptance notification to HR: ${mailErr.message}`);
+        }
+
+        return success(res, `${letter.type === 'appointment' ? 'Appointment' : 'Offer'} letter accepted and digitally signed successfully!`, {
           status: 'accepted',
           accepted_at: acceptedAt,
           candidate_name: candidateName,
@@ -729,7 +774,7 @@ class LetterController {
         meta = {
           ...meta,
           acceptance_status: 'rejected',
-          rejection_reason: reason || 'Candidate declined the offer',
+          rejection_reason: reason || 'Declined by candidate/employee',
           rejected_at: rejectedAt,
         };
 
@@ -750,29 +795,37 @@ class LetterController {
             reason: reason || 'No specific reason provided',
           });
         } catch (mailErr) {
-          logger.error(`Failed to send offer rejected notification to HR: ${mailErr.message}`);
+          logger.error(`Failed to send rejection notification to HR: ${mailErr.message}`);
         }
 
-        return success(res, 'Offer letter declined.', {
+        return success(res, `${letter.type === 'appointment' ? 'Appointment' : 'Offer'} letter response recorded.`, {
           status: 'rejected',
           rejected_at: rejectedAt,
         }, 200);
       }
     } catch (err) {
-      logger.error(`Respond public offer letter error: ${err.message}`);
+      logger.error(`Respond public letter error: ${err.message}`);
       return next(err);
     }
   }
 
+  async respondPublicOfferLetter(req, res, next) {
+    return this.respondPublicLetter(req, res, next);
+  }
+
+  async respondPublicAppointmentLetter(req, res, next) {
+    return this.respondPublicLetter(req, res, next);
+  }
+
   /**
-   * Public: Download official offer letter PDF
+   * Public: Download official letter PDF by token
    */
-  async downloadPublicOfferLetterPDF(req, res, next) {
+  async downloadPublicLetterPDF(req, res, next) {
     try {
       const { token } = req.params;
       const letter = await findLetterByAcceptanceToken(token);
       if (!letter) {
-        return res.status(404).json({ success: false, message: 'Offer letter not found' });
+        return res.status(404).json({ success: false, message: 'Letter not found' });
       }
 
       const meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
@@ -780,12 +833,12 @@ class LetterController {
 
       const employeeObj = letter.issuedTo || {
         name: letter.candidate_name || candidateInfo.name || 'Candidate',
-        emp_code: 'NEW',
+        emp_code: candidateInfo.emp_code || 'NEW',
         email: letter.candidate_email || candidateInfo.email || '',
         phone: letter.candidate_phone || candidateInfo.phone || '',
         designation: candidateInfo.designation || 'Specialist',
         department: candidateInfo.department || 'Operations',
-        company: { name: candidateInfo.company || 'Apaar Logistics' },
+        company: { name: candidateInfo.company || 'BP Marketing' },
         office: { name: candidateInfo.office || 'Head Office', address: '' },
       };
 
@@ -804,7 +857,172 @@ class LetterController {
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send(pdfBuffer);
     } catch (err) {
-      logger.error(`Download public offer letter PDF error: ${err.message}`);
+      logger.error(`Download public letter PDF error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  async downloadPublicOfferLetterPDF(req, res, next) {
+    return this.downloadPublicLetterPDF(req, res, next);
+  }
+
+  async downloadPublicAppointmentLetterPDF(req, res, next) {
+    return this.downloadPublicLetterPDF(req, res, next);
+  }
+
+  /**
+   * Admin/HR: 1-Click issue and email Appointment Letter with digital signing link
+   */
+  async issueAndSendAppointmentLetter(req, res, next) {
+    try {
+      const { invitationId, invitation_id, employeeId, employee_id, signatoryId, signatory_id } = req.body;
+      const resolvedInvId = req.params.id || invitationId || invitation_id;
+      let resolvedEmpId = employeeId || employee_id;
+
+      let invitation = null;
+      if (resolvedInvId) {
+        invitation = await OnboardingInvitation.findByPk(resolvedInvId);
+      }
+
+      let employee = null;
+      if (resolvedEmpId) {
+        employee = await Employee.findByPk(resolvedEmpId, {
+          include: [
+            { model: Office, as: 'office' },
+            { model: Company, as: 'company' },
+          ],
+        });
+      } else if (invitation) {
+        employee = await Employee.findOne({
+          where: { email: invitation.email },
+          include: [
+            { model: Office, as: 'office' },
+            { model: Company, as: 'company' },
+          ],
+        });
+      }
+
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: 'Employee not found. Please ensure candidate onboarding is approved before issuing the appointment letter.'
+        });
+      }
+
+      // Resolve Signatory
+      const resolvedSigId = signatoryId || signatory_id;
+      let signatory = null;
+      if (resolvedSigId) {
+        signatory = await AuthorisedSignatory.findByPk(resolvedSigId);
+      }
+      if (!signatory) {
+        signatory = await AuthorisedSignatory.findOne({ where: { is_active: true } });
+      }
+
+      // Find or seed Appointment Letter template
+      let template = await LetterTemplate.findOne({
+        where: { type: 'appointment', is_active: true },
+      });
+      if (!template) {
+        await letterTemplateService.seedDefaultTemplates(req.employee ? req.employee.id : 1);
+        template = await LetterTemplate.findOne({
+          where: { type: 'appointment', is_active: true },
+        });
+      }
+
+      // Populate template with employee's actual details & Annexure A
+      let content = '';
+      if (template) {
+        const previewRes = await letterTemplateService.previewTemplate(template.id, employee.id, null, signatory ? signatory.id : null);
+        content = previewRes.content;
+      } else {
+        content = `<p>Dear <strong>${employee.name}</strong>,</p><p>We are delighted to confirm your appointment as <strong>${employee.designation || 'Staff'}</strong> at <strong>${employee.company?.name || 'BP Marketing'}</strong>.</p>`;
+      }
+
+      // Generate digital acceptance token & link
+      const acceptanceToken = crypto.randomBytes(32).toString('hex');
+      const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
+      const acceptanceLink = `${frontendUrl}/appointment-acceptance?token=${acceptanceToken}`;
+
+      const title = `Appointment Letter - ${employee.name} (${employee.emp_code || 'NEW'})`;
+      const letterMetadata = {
+        candidate_details: {
+          name: employee.name,
+          emp_code: employee.emp_code,
+          email: employee.email,
+          phone: employee.phone,
+          designation: employee.designation,
+          department: employee.department,
+          company: employee.company?.name || 'BP Marketing',
+          office: employee.office?.name || employee.location || 'Head Office',
+          fixed_gross: employee.fixed_gross,
+          date_of_joining: employee.date_of_joining,
+        },
+        invitation_id: invitation ? invitation.id : null,
+        acceptance_token: acceptanceToken,
+        acceptance_status: 'pending',
+        acceptance_link: acceptanceLink,
+        candidate_signature: null,
+        signed_name: null,
+        accepted_at: null,
+        rejection_reason: null,
+      };
+
+      // Create Letter record
+      const letter = await letterService.issueLetter({
+        employee_id: employee.id,
+        type: 'appointment',
+        title,
+        content,
+        issued_date: new Date(),
+        status: 'issued',
+        signatory_id: signatory ? signatory.id : null,
+        metadata: letterMetadata,
+      }, req.employee ? req.employee.id : null);
+
+      // Generate PDF
+      const pdfBuffer = await letterPdfService.generateLetterPDF({
+        content,
+        employee,
+        title,
+        type: 'appointment',
+        signatory,
+        metadata: letterMetadata,
+        letterDate: new Date(),
+      });
+
+      // Send official email
+      const companyName = employee.company?.name || 'BP Marketing';
+      const emailResult = await emailService.sendOfficialLetterEmail({
+        to: employee.email,
+        employeeName: employee.name,
+        empCode: employee.emp_code || '',
+        letterTitle: title,
+        letterType: 'appointment',
+        companyName,
+        pdfBuffer,
+        acceptanceLink,
+      });
+
+      // If linked to an onboarding invitation, update invitation submitted_data
+      if (invitation) {
+        const subData = invitation.submitted_data || {};
+        subData.appointment_letter_id = letter.id;
+        subData.appointment_status = 'sent';
+        subData.appointment_token = acceptanceToken;
+        subData.appointment_sent_at = new Date().toISOString();
+        invitation.submitted_data = subData;
+        await invitation.save();
+      }
+
+      return success(res, `Appointment letter generated and emailed to ${employee.email} successfully!`, {
+        letter_id: letter.id,
+        acceptance_link: acceptanceLink,
+        acceptance_token: acceptanceToken,
+        email_sent: emailResult.accepted?.length > 0,
+      }, 201);
+    } catch (err) {
+      logger.error(`Issue and send appointment letter error: ${err.message}`);
       return next(err);
     }
   }

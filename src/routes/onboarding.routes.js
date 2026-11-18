@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize, requirePermission } = require('../middleware/role.middleware');
 const onboardingInvitationController = require('../controllers/onboarding_invitation.controller');
+const letterController = require('../controllers/letter.controller');
 
 // ── Public Routes (for prospective candidates completing self-onboarding) ──
 router.get('/public/validate/:token', onboardingInvitationController.validateToken);
@@ -14,5 +15,6 @@ router.post('/invite', requirePermission('onboarding:create'), onboardingInvitat
 router.get('/invitations', requirePermission('onboarding:read'), onboardingInvitationController.getAllInvitations);
 router.post('/approve/:id', requirePermission('onboarding:update'), onboardingInvitationController.approveInvitation);
 router.post('/reject/:id', requirePermission('onboarding:update'), onboardingInvitationController.rejectInvitation);
+router.post('/invitations/:id/send-appointment-letter', requirePermission('onboarding:update'), letterController.issueAndSendAppointmentLetter);
 
 module.exports = router;

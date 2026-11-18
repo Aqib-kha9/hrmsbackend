@@ -248,8 +248,13 @@ class EmailService {
         }
         break;
       case 'appointment':
-        letterDescription = 'We are pleased to issue your formal Appointment Letter confirming your employment.';
-        actionInstructions = 'Please review your appointment terms and detailed salary breakdown (Annexure A). You are requested to sign and return a copy for your employee records.';
+        if (acceptanceLink) {
+          letterDescription = 'Following your successful onboarding, we are delighted to issue your official Appointment Letter and invite you to review and digitally sign your appointment terms.';
+          actionInstructions = 'Please click the link below to review your appointment confirmation, detailed salary breakdown (Annexure A), and digitally sign to accept your appointment.';
+        } else {
+          letterDescription = 'We are pleased to issue your formal Appointment Letter confirming your employment.';
+          actionInstructions = 'Please review your appointment terms and detailed salary breakdown (Annexure A). You are requested to sign and return a copy for your employee records.';
+        }
         break;
       case 'relieving':
         letterDescription = 'This letter formally confirms that you have been relieved from your duties.';
@@ -288,14 +293,18 @@ class EmailService {
     ${acceptanceLink ? `
       <div style="background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%); border: 1.5px solid #2563eb; padding: 22px 24px; margin: 22px 0; border-radius: 12px; text-align: center; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);">
         <div style="display: inline-block; background: #dbeafe; color: #1e40af; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; padding: 4px 12px; border-radius: 9999px; margin-bottom: 10px;">
-          ✍️ Digital Offer Acceptance Portal
+          ${letterType === 'appointment' ? '✍️ Official Appointment Acceptance Portal' : '✍️ Digital Offer Acceptance Portal'}
         </div>
-        <h3 style="margin: 0 0 8px; color: #0f172a; font-size: 17px; font-weight: 800;">Review &amp; Digitally Sign Your Offer</h3>
+        <h3 style="margin: 0 0 8px; color: #0f172a; font-size: 17px; font-weight: 800;">
+          ${letterType === 'appointment' ? 'Review &amp; Digitally Sign Your Appointment Letter' : 'Review &amp; Digitally Sign Your Offer'}
+        </h3>
         <p style="margin: 0 0 18px; font-size: 13.5px; color: #475569; line-height: 1.55; max-width: 480px; margin-left: auto; margin-right: auto;">
-          Please review your offered compensation, terms of employment, and sign digitally online to accept this offer. Once accepted, your onboarding portal link will be issued.
+          ${letterType === 'appointment'
+            ? 'Following your successful onboarding, please review your official appointment terms, compensation structure (Annexure A), and provide your digital signature to confirm your appointment.'
+            : 'Please review your offered compensation, terms of employment, and sign digitally online to accept this offer. Once accepted, your onboarding portal link will be issued.'}
         </p>
         <a href="${acceptanceLink}" target="_blank" style="display: inline-block; background: #2563eb; color: #ffffff; padding: 13px 34px; font-size: 14px; font-weight: 700; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35); letter-spacing: 0.3px;">
-          Review &amp; Digitally Sign Offer &rarr;
+          ${letterType === 'appointment' ? 'Review &amp; Digitally Sign Appointment Letter &rarr;' : 'Review &amp; Digitally Sign Offer &rarr;'}
         </a>
         <p style="margin: 16px 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
           Direct link: <a href="${acceptanceLink}" style="color: #2563eb; word-break: break-all; font-weight: 600;">${acceptanceLink}</a>
@@ -414,6 +423,54 @@ class EmailService {
     return this.sendMail({
       to,
       subject: `✓ Offer Accepted: ${candidateName} has digitally signed the offer for ${designation}`,
+      html,
+    });
+  }
+
+  /**
+   * Send notification to HR when employee digitally accepts & signs the appointment letter
+   */
+  async sendAppointmentAcceptedNotification({ to, employeeName, empCode = '', employeeEmail, designation, companyName, acceptedAt }) {
+    const formattedDate = new Date(acceptedAt || Date.now()).toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+        <div style="background-color: #0f172a; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h2 style="color: #22c55e; margin: 0; font-size: 20px;">✓ Appointment Letter Accepted &amp; Digitally Signed</h2>
+          <p style="color: #94a3b8; margin: 6px 0 0; font-size: 13px;">${companyName} — HR Operations</p>
+        </div>
+        <div style="padding: 24px 8px;">
+          <p style="font-size: 15px; color: #334155; margin-top: 0;">Hello HR Team,</p>
+          <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+            Employee <strong>${employeeName}</strong> (${empCode || 'New'}) has reviewed and <strong>digitally signed</strong> their official <strong>Appointment Letter</strong> and compensation structure (Annexure A).
+          </p>
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 13px; color: #166534;"><strong>Employee Name:</strong> ${employeeName}</p>
+            ${empCode ? `<p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Employee Code:</strong> ${empCode}</p>` : ''}
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Email:</strong> ${employeeEmail}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Designation:</strong> ${designation}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Signed Timestamp:</strong> ${formattedDate}</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: #166534;"><strong>Status:</strong> Digital Signature Verified &amp; Recorded</p>
+          </div>
+          <p style="font-size: 13px; color: #64748b;">
+            The digital signature verified PDF has been generated and archived in the HRMS documents ledger.
+          </p>
+        </div>
+        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; text-align: center; font-size: 11px; color: #94a3b8;">
+          &copy; ${new Date().getFullYear()} ${companyName}. Automated HRMS Notification.
+        </div>
+      </div>
+    `;
+
+    return this.sendMail({
+      to,
+      subject: `✓ Appointment Letter Signed: ${employeeName} (${empCode || 'New'}) — ${companyName}`,
       html,
     });
   }
