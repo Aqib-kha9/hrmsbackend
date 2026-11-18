@@ -513,9 +513,9 @@ class LetterController {
       const requiresDigitalSignature = isOfferLetter || isAppointmentLetter;
       let acceptanceLink = null;
       const frontendUrl = env.APP_URL || env.FRONTEND_URL || 'http://localhost:3000';
+      let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
 
       if (requiresDigitalSignature) {
-        let meta = typeof letter.metadata === 'string' ? JSON.parse(letter.metadata || '{}') : (letter.metadata || {});
         if (!meta.acceptance_token) {
           meta.acceptance_token = crypto.randomBytes(32).toString('hex');
           meta.acceptance_status = meta.acceptance_status || 'pending';
