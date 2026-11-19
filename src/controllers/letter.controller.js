@@ -40,9 +40,9 @@ async function findLetterByAcceptanceToken(token) {
     logger.warn(`JSON_EXTRACT lookup failed (${err.message}), falling back to scan`);
   }
 
-  // Fallback: search recent offer letters
+  // Fallback: search recent offer or appointment letters
   const letters = await Letter.findAll({
-    where: { type: 'offer' },
+    where: { type: ['offer', 'appointment'] },
     order: [['id', 'DESC']],
     limit: 500,
     include: [
@@ -68,6 +68,16 @@ async function findLetterByAcceptanceToken(token) {
 }
 
 class LetterController {
+  constructor() {
+    // Auto-bind all methods so Express route handlers never lose `this` context
+    const proto = Object.getPrototypeOf(this);
+    for (const key of Object.getOwnPropertyNames(proto)) {
+      if (key !== 'constructor' && typeof this[key] === 'function') {
+        this[key] = this[key].bind(this);
+      }
+    }
+  }
+
   async getMyLetters(req, res, next) {
     try {
       const employeeId = req.employee.id;
@@ -644,11 +654,11 @@ class LetterController {
   }
 
   async getPublicOfferLetter(req, res, next) {
-    return this.getPublicLetter(req, res, next);
+    return (this?.getPublicLetter || LetterController.prototype.getPublicLetter)(req, res, next);
   }
 
   async getPublicAppointmentLetter(req, res, next) {
-    return this.getPublicLetter(req, res, next);
+    return (this?.getPublicLetter || LetterController.prototype.getPublicLetter)(req, res, next);
   }
 
   /**
@@ -810,11 +820,11 @@ class LetterController {
   }
 
   async respondPublicOfferLetter(req, res, next) {
-    return this.respondPublicLetter(req, res, next);
+    return (this?.respondPublicLetter || LetterController.prototype.respondPublicLetter)(req, res, next);
   }
 
   async respondPublicAppointmentLetter(req, res, next) {
-    return this.respondPublicLetter(req, res, next);
+    return (this?.respondPublicLetter || LetterController.prototype.respondPublicLetter)(req, res, next);
   }
 
   /**
@@ -863,11 +873,11 @@ class LetterController {
   }
 
   async downloadPublicOfferLetterPDF(req, res, next) {
-    return this.downloadPublicLetterPDF(req, res, next);
+    return (this?.downloadPublicLetterPDF || LetterController.prototype.downloadPublicLetterPDF)(req, res, next);
   }
 
   async downloadPublicAppointmentLetterPDF(req, res, next) {
-    return this.downloadPublicLetterPDF(req, res, next);
+    return (this?.downloadPublicLetterPDF || LetterController.prototype.downloadPublicLetterPDF)(req, res, next);
   }
 
   /**
