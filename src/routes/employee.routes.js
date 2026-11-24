@@ -18,6 +18,7 @@ router.patch('/profile', validate(updateProfileSchema), employeeController.updat
 router.get('/', requirePermission('employees:read'), validate(employeeQuerySchema, 'query'), employeeController.getAllEmployees);
 router.get('/next-code', requirePermission('employees:create'), employeeController.getNextCode);
 router.get('/recently-added', requirePermission('employees:read'), employeeController.getRecentlyAdded);
+router.get('/export-onboarding-excel', requirePermission('employees:read'), employeeController.exportOnboardingMasterExcel);
 router.get('/:id', selfOrAdmin(), employeeController.getEmployeeById);
 router.patch('/:id', requirePermission('employees:update'), validate(updateEmployeeSchema), employeeController.updateEmployee);
 router.delete('/:id', requirePermission('employees:delete'), employeeController.deleteEmployee);
