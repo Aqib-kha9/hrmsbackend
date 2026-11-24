@@ -1,7 +1,8 @@
-const { LetterTemplate, Employee, Office, Company, AuthorisedSignatory, sequelize } = require('../models');
+const { LetterTemplate, Employee, Office, Company, AuthorisedSignatory, SalaryStructure, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { getPTSlabs } = require('../utils/payrollHelper');
+const { calculateSalaryStructure } = require('../utils/salaryCalculatorEngine');
 
 
 class LetterTemplateService {
@@ -181,67 +182,139 @@ class LetterTemplateService {
     const dateStr = today.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     const fullDateStr = today.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
 
-    // Build substitution map using 40% strict rule
-    const gross = Number(employee.fixed_gross) || 0;
-    const basic = Math.round(gross * 0.40);
-    const hra = Math.round(basic * 0.40);
-    const special = gross - basic - hra;
-
-    // Modes
-    const pf_applicable = employee.pf_applicable !== false;
-    const pf_ceiling = employee.pf_ceiling !== false;
-    const pf_mode = employee.pf_contribution_mode || 'shared';
-    const esic_applicable = employee.esic_applicable !== false;
-    const esic_mode = employee.esic_contribution_mode || 'shared';
-    const pt_applicable = employee.pt_applicable !== false;
-
-    // Calculations
-    const pfBase = (pf_ceiling && basic > 15000) ? 15000 : basic;
-    const pfEmpRate = employee.pf_employer_rate ?? 0.12;
-    const pfEpeRate = employee.pf_employee_rate ?? 0.12;
-    
-    let pfEmployer = 0, pfEmployee = 0;
-    if (pf_applicable) {
-      if (pf_mode === 'shared' || pf_mode === 'employer_only') pfEmployer = Math.round(pfBase * pfEmpRate);
-      if (pf_mode === 'shared' || pf_mode === 'employee_only') pfEmployee = Math.round(pfBase * pfEpeRate);
-    }
-
-    const esiEmpRate = employee.esic_employer_rate ?? 0.0325;
-    const esiEpeRate = employee.esic_employee_rate ?? 0.0075;
-
-    let esiEmployer = 0, esiEmployee = 0;
-    if (esic_applicable) {
-      if (esic_mode === 'shared' || esic_mode === 'employer_only') esiEmployer = Math.ceil(gross * esiEmpRate);
-      if (esic_mode === 'shared' || esic_mode === 'employee_only') esiEmployee = Math.ceil(gross * esiEpeRate);
-    }
-
-    let professionalTax = 0;
-    if (pt_applicable) {
-      for (const slab of ptSlabs) {
-        const toLimit = slab.to === null || slab.to === undefined ? Infinity : slab.to;
-        if (gross >= slab.from && gross <= toLimit) {
-          professionalTax = slab.amount;
-          break;
-        }
+    let activeStructure = null;
+    if (employeeId && employee && employee.id !== 'candidate') {
+      try {
+        activeStructure = await SalaryStructure.findOne({
+          where: { employee_id: employee.id, is_active: true }
+        });
+      } catch (err) {
+        logger.warn(`Could not load active salary structure for employee ${employee.id}: ${err.message}`);
       }
     }
 
-    const totalDeductions = pfEmployee + esiEmployee + professionalTax;
-    const netTakeHome = gross - totalDeductions;
-    const ctc = gross + pfEmployer + esiEmployer;
+    let gross = 0;
+    let basic = 0;
+    let hra = 0;
+    let special = 0;
+    let pfEmployer = 0;
+    let pfEmployee = 0;
+    let esiEmployer = 0;
+    let esiEmployee = 0;
+    let gratuity = 0;
+    let statutoryBonus = 0;
+    let exgratiaBonus = 0;
+    let totalBonus = 0;
+    let professionalTax = 0;
+    let netTakeHome = 0;
+    let ctc = 0;
 
-    const basic_annual = basic * 12;
-    const hra_annual = hra * 12;
-    const special_annual = special * 12;
-    const gross_annual = gross * 12;
-    const pf_annual = pfEmployer * 12;
-    const esi_annual = esiEmployer * 12;
-    const pf_emp_annual = pfEmployee * 12;
-    const esi_emp_annual = esiEmployee * 12;
-    const pt_annual = professionalTax * 12;
-    const deductions_annual = totalDeductions * 12;
-    const net_annual = netTakeHome * 12;
-    const ctc_annual = ctc * 12;
+    let basic_annual = 0;
+    let hra_annual = 0;
+    let special_annual = 0;
+    let gross_annual = 0;
+    let pf_annual = 0;
+    let esi_annual = 0;
+    let pf_emp_annual = 0;
+    let esi_emp_annual = 0;
+    let pt_annual = 0;
+    let gratuity_annual = 0;
+    let statutory_bonus_annual = 0;
+    let exgratia_bonus_annual = 0;
+    let total_bonus_annual = 0;
+    let totalDeductions = 0;
+    let deductions_annual = 0;
+    let net_annual = 0;
+    let ctc_annual = 0;
+
+    if (activeStructure) {
+      ctc_annual = Number(activeStructure.ctc_amount) || 0;
+      ctc = Math.round(ctc_annual / 12);
+      gross = Number(activeStructure.gross_amount) || Number(employee.fixed_gross) || 0;
+      gross_annual = gross * 12;
+      basic = Number(activeStructure.basic_salary) || Math.round(gross * 0.50);
+      basic_annual = basic * 12;
+      hra = Number(activeStructure.hra) || Math.round(basic * 0.40);
+      hra_annual = hra * 12;
+      special = Number(activeStructure.special_allowance) || (gross - basic - hra);
+      special_annual = special * 12;
+      pfEmployer = Number(activeStructure.employer_pf) || 0;
+      pf_annual = pfEmployer * 12;
+      pfEmployee = Number(activeStructure.employee_pf) || 0;
+      pf_emp_annual = pfEmployee * 12;
+      esiEmployer = Number(activeStructure.employer_esic) || 0;
+      esi_annual = esiEmployer * 12;
+      esiEmployee = Number(activeStructure.employee_esic) || 0;
+      esi_emp_annual = esiEmployee * 12;
+      gratuity = Number(activeStructure.gratuity_amount) || 0;
+      gratuity_annual = gratuity * 12;
+      statutoryBonus = Number(activeStructure.statutory_bonus) || 0;
+      statutory_bonus_annual = statutoryBonus * 12;
+      exgratiaBonus = Number(activeStructure.exgratia_bonus) || 0;
+      exgratia_bonus_annual = exgratiaBonus * 12;
+      totalBonus = statutoryBonus + exgratiaBonus;
+      total_bonus_annual = statutory_bonus_annual + exgratia_bonus_annual;
+      professionalTax = Number(activeStructure.pt_amount) || 0;
+      pt_annual = professionalTax * 12;
+      totalDeductions = pfEmployee + esiEmployee + professionalTax;
+      deductions_annual = totalDeductions * 12;
+      netTakeHome = Number(activeStructure.net_take_home) || (gross - totalDeductions);
+      net_annual = netTakeHome * 12;
+    } else {
+      // Dynamic calculation engine for candidates or employees without structure
+      const basis = candidateData?.calculation_basis || (candidateData?.ctc_amount ? 'CTC' : 'Gross');
+      const inputAmount = basis === 'CTC'
+        ? Number(candidateData?.ctc_amount || (Number(employee.fixed_gross) * 12) || 0)
+        : Number(candidateData?.fixed_gross || employee.fixed_gross || 0);
+
+      const calc = calculateSalaryStructure({
+        basis,
+        amount: inputAmount,
+        isMonthly: basis !== 'CTC',
+        state: candidateData?.state || employee.office?.state || 'MP',
+        wagesCategory: candidateData?.wages_category || 'Skilled',
+        basicPct: 0.50,
+        hraPct: 0.40,
+        pfApplicable: employee.pf_applicable !== false,
+        esicApplicable: employee.esic_applicable !== false,
+        bonusApplicable: true,
+        gratuityApplicable: true,
+        ptApplicable: employee.pt_applicable !== false,
+      });
+
+      ctc = calc.monthlyCTC;
+      ctc_annual = calc.annualCTC;
+      gross = calc.monthlyGross;
+      gross_annual = calc.annualGross;
+      basic = calc.monthlyBasic;
+      basic_annual = calc.annualBasic;
+      hra = calc.monthlyHra;
+      hra_annual = calc.annualHra;
+      special = calc.monthlySpecialAllowance;
+      special_annual = calc.annualSpecialAllowance;
+      pfEmployer = calc.monthlyEmployerPF;
+      pf_annual = calc.annualEmployerPF;
+      pfEmployee = calc.monthlyEmployeePF;
+      pf_emp_annual = calc.annualEmployeePF;
+      esiEmployer = calc.monthlyEmployerESIC;
+      esi_annual = calc.annualEmployerESIC;
+      esiEmployee = calc.monthlyEmployeeESIC;
+      esi_emp_annual = calc.annualEmployeeESIC;
+      gratuity = calc.monthlyGratuity;
+      gratuity_annual = calc.annualGratuity;
+      statutoryBonus = calc.monthlyStatutoryBonus;
+      statutory_bonus_annual = calc.annualStatutoryBonus;
+      exgratiaBonus = calc.monthlyExgratiaBonus;
+      exgratia_bonus_annual = calc.annualExgratiaBonus;
+      totalBonus = calc.monthlyTotalBonus;
+      total_bonus_annual = calc.annualTotalBonus;
+      professionalTax = calc.monthlyPT;
+      pt_annual = calc.annualPT;
+      netTakeHome = calc.monthlyNetTakeHome;
+      net_annual = calc.annualNetTakeHome;
+      totalDeductions = calc.totalMonthlyDeductions;
+      deductions_annual = calc.totalAnnualDeductions;
+    }
 
     // Form 16 / Tax & Statutory calculations
     const curYear = today.getFullYear();
@@ -336,6 +409,14 @@ class LetterTemplateService {
       '[Total_Deductions_Annual]': deductions_annual ? `₹ ${deductions_annual.toLocaleString('en-IN')}` : '₹ 0',
       '[Net_Take_Home]': netTakeHome ? `₹ ${netTakeHome.toLocaleString('en-IN')}` : '₹ 0',
       '[Net_Take_Home_Annual]': net_annual ? `₹ ${net_annual.toLocaleString('en-IN')}` : '₹ 0',
+      '[Gratuity]': gratuity ? `₹ ${gratuity.toLocaleString('en-IN')}` : '₹ 0',
+      '[Gratuity_Annual]': gratuity_annual ? `₹ ${gratuity_annual.toLocaleString('en-IN')}` : '₹ 0',
+      '[Statutory_Bonus]': statutoryBonus ? `₹ ${statutoryBonus.toLocaleString('en-IN')}` : '₹ 0',
+      '[Statutory_Bonus_Annual]': statutory_bonus_annual ? `₹ ${statutory_bonus_annual.toLocaleString('en-IN')}` : '₹ 0',
+      '[Exgratia_Bonus]': exgratiaBonus ? `₹ ${exgratiaBonus.toLocaleString('en-IN')}` : '₹ 0',
+      '[Exgratia_Bonus_Annual]': exgratia_bonus_annual ? `₹ ${exgratia_bonus_annual.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_Bonus]': totalBonus ? `₹ ${totalBonus.toLocaleString('en-IN')}` : '₹ 0',
+      '[Total_Bonus_Annual]': total_bonus_annual ? `₹ ${total_bonus_annual.toLocaleString('en-IN')}` : '₹ 0',
       '[CTC]': ctc ? `₹ ${ctc.toLocaleString('en-IN')}` : '_______________',
       '[CTC_Annual]': ctc_annual ? `₹ ${ctc_annual.toLocaleString('en-IN')}` : '_______________',
       '[Bank_Name]': employee.bank_name || '_______________',
@@ -538,7 +619,7 @@ Your detailed compensation and salary component structure is set forth in <stron
     </thead>
     <tbody>
       <tr>
-        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1);">Basic Salary (40% of Gross)</td>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1);">Basic Salary (New Wage Code / Min Wages)</td>
         <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary]</td>
         <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1);">[Basic_Salary_Annual]</td>
       </tr>
@@ -591,6 +672,16 @@ Your detailed compensation and salary component structure is set forth in <stron
         <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">Add: Employer State Insurance (ESIC)</td>
         <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[ESI_Employer]</td>
         <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[ESI_Employer_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">Add: Gratuity (4.81% of Basic)</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[Gratuity]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[Gratuity_Annual]</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">Add: Annual Bonus / Exgratia</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[Total_Bonus]</td>
+        <td style="padding: 6px 10px; text-align: right; border: 1px solid rgba(0,0,0,0.1); color: #2563eb;">[Total_Bonus_Annual]</td>
       </tr>
       <tr style="font-weight: 900; background: rgba(15,23,42,0.08);">
         <td style="padding: 9px 10px; border: 2px solid rgba(15,23,42,0.2); color: #0f172a;">Total Cost to Company (CTC)</td>

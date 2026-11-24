@@ -168,6 +168,14 @@ async function startServer() {
       logger.warn('RBAC auto-seed check:', rbacErr.message);
     }
 
+    // Ensure Minimum Wages & PT Slabs master data is seeded
+    try {
+      const { seedMinimumWagesAndPt } = require('./seeders/seed_minimum_wages_and_pt');
+      await seedMinimumWagesAndPt();
+    } catch (mwErr) {
+      logger.warn('Minimum Wages / PT auto-seed warning:', mwErr.message);
+    }
+
     // Start Express server
     const server = app.listen(PORT, () => {
       logger.info(`🚀 HRMS Backend running on port ${PORT}`);

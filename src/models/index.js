@@ -32,6 +32,8 @@ const Role = require('./role.model');
 const Permission = require('./permission.model');
 const RolePermission = require('./role_permission.model');
 const AttendanceRegularization = require('./attendance_regularization.model');
+const MinimumWage = require('./minimum_wage.model');
+const ProfessionalTaxSlab = require('./professional_tax_slab.model');
 
 // ── Define Associations ──
 
@@ -214,4 +216,6 @@ module.exports = {
   Role,
   Permission,
   RolePermission,
+  MinimumWage,
+  ProfessionalTaxSlab,
 };

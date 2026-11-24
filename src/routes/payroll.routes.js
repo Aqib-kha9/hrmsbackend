@@ -14,9 +14,24 @@ const {
 } = require('../validators/payroll.validator');
 const payrollController = require('../controllers/payroll.controller');
 const payrollLedgerController = require('../controllers/payroll_ledger.controller');
+const salaryStructureController = require('../controllers/salary_structure.controller');
+const multer = require('multer');
+const uploadExcel = multer({ storage: multer.memoryStorage() });
 
 // All routes require authentication
 router.use(authenticate);
+
+// ── CTC Structure Calculator & Wage Code Master Engine ──
+router.post('/calculate-ctc', (req, res, next) => salaryStructureController.calculateCTC(req, res, next));
+router.get('/minimum-wages', (req, res, next) => salaryStructureController.getMinimumWages(req, res, next));
+router.post('/minimum-wages', requirePermission('payroll:update'), (req, res, next) => salaryStructureController.updateMinimumWage(req, res, next));
+router.get('/pt-slabs', (req, res, next) => salaryStructureController.getPTSlabs(req, res, next));
+
+// ── Employee Salary Structure Roster & Bulk Management ──
+router.get('/salary-structures', requirePermission('payroll:read'), (req, res, next) => salaryStructureController.getSalaryStructures(req, res, next));
+router.put('/salary-structures/:employeeId', requirePermission('payroll:update'), (req, res, next) => salaryStructureController.updateEmployeeSalaryStructure(req, res, next));
+router.post('/salary-structures/import-client-excel', requirePermission('payroll:update'), uploadExcel.single('file'), (req, res, next) => salaryStructureController.importClientExcel(req, res, next));
+router.get('/salary-structures/export-excel', requirePermission('payroll:read'), (req, res, next) => salaryStructureController.exportSalaryStructuresExcel(req, res, next));
 
 // ── Legacy payslip routes ──
 router.get('/payslips', payrollController.getMyPayslips);
