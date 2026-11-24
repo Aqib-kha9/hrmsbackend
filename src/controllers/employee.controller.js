@@ -270,137 +270,215 @@ class EmployeeController {
       const employees = await Employee.findAll({
         order: [['id', 'ASC']],
         include: [
-          { model: Company, as: 'company', attributes: ['id', 'name', 'code', 'email', 'phone', 'city', 'state'] },
-          { model: Office, as: 'office', attributes: ['id', 'name', 'offices_code', 'city', 'state', 'address'] },
-          { model: Role, as: 'roleDetails', attributes: ['id', 'name'] },
-          { model: SalaryStructure, as: 'salaryStructures', where: { is_active: true }, required: false },
+          { model: Company, as: 'company', attributes: ['id', 'name', 'code', 'email', 'phone', 'city', 'state'], required: false },
+          { model: Office, as: 'office', attributes: ['id', 'name', 'code', 'city', 'state', 'address'], required: false },
+          { model: Role, as: 'roleDetails', attributes: ['id', 'name'], required: false },
+          { model: SalaryStructure, as: 'salaryStructures', required: false },
         ],
       });
 
-      const invitations = await OnboardingInvitation.findAll({
-        order: [['id', 'DESC']],
-        include: [
-          { model: Company, as: 'company', attributes: ['name'] },
-          { model: Office, as: 'office', attributes: ['name', 'city'] },
-        ],
+      let invitations = [];
+      try {
+        invitations = await OnboardingInvitation.findAll({
+          order: [['id', 'DESC']],
+          include: [
+            { model: Company, as: 'company', attributes: ['name'], required: false },
+            { model: Office, as: 'office', attributes: ['name', 'city'], required: false },
+          ],
+        });
+      } catch (invErr) {
+        logger.warn(`Could not load invitations with associations: ${invErr.message}, loading bare invitations`);
+        invitations = await OnboardingInvitation.findAll({ order: [['id', 'DESC']] });
+      }
+
+      // Map invitations by email and phone for quick fallback lookup
+      const invMap = {};
+      invitations.forEach((inv) => {
+        if (inv.email) invMap[inv.email.trim().toLowerCase()] = inv;
+        if (inv.phone) invMap[inv.phone.trim()] = inv;
       });
 
-      // Sheet 1: Employee Onboarding Master
+      // Sheet 1: Employee Onboarding Master (Complete Profile, KYC & Statutory Details)
       const empRows = employees.map((emp, index) => {
         const struct = (emp.salaryStructures && emp.salaryStructures[0]) || {};
+        const matchedInv = invMap[emp.email?.trim().toLowerCase()] || invMap[emp.phone?.trim()] || {};
+        const sub = (matchedInv.submitted_data && typeof matchedInv.submitted_data === 'object') ? matchedInv.submitted_data : {};
         const docs = typeof emp.documents === 'object' && emp.documents ? emp.documents : {};
-        const docsList = Object.keys(docs).filter(k => !!docs[k]).join(', ') || (emp.photo_url ? 'Photo' : 'None');
+        const docsList = Object.keys(docs).filter(k => !!docs[k]).join(', ') || (emp.profile_image ? 'Photo' : (matchedInv.submitted_data ? 'Submitted via Onboarding Portal' : 'None'));
+
+        const fixedGross = Number(emp.fixed_gross) || Number(struct.fixed_gross) || Number(sub.fixed_gross) || Number(matchedInv.fixed_gross) || 0;
+        const basicSalary = Number(struct.basic_salary) || Number(emp.basic_salary) || Math.round(fixedGross * 0.50);
+        const hra = Number(struct.hra) || Math.round(basicSalary * 0.40);
+        const specialAllowance = Number(struct.special_allowance) || Math.max(0, fixedGross - basicSalary - hra);
+        const annualCtc = Number(struct.annual_ctc) || Number(emp.annual_ctc) || (fixedGross * 12);
 
         return {
           'Sr No': index + 1,
           'Employee ID': emp.emp_code || '',
-          'Full Name': emp.name || '',
+          'Full Name': emp.name || sub.name || matchedInv.candidate_name || '',
           'Employment Status': (emp.status || 'active').toUpperCase(),
-          'Company': emp.company?.name || '',
-          'Work Location / Office': emp.office?.name || emp.location || '',
-          'City': emp.office?.city || '',
-          'State': emp.office?.state || '',
-          'Department': emp.department || '',
-          'Designation': emp.designation || '',
-          'Role / Access Group': emp.roleDetails?.name || emp.role_name || 'Staff',
-          'Date of Joining': emp.date_of_joining ? new Date(emp.date_of_joining).toLocaleDateString('en-IN') : '',
-          'Work Email': emp.email || '',
-          'Mobile Number': emp.phone || '',
-          'Alternate Phone': emp.alternate_phone || '',
-          'Date of Birth': emp.dob ? new Date(emp.dob).toLocaleDateString('en-IN') : '',
-          'Gender': emp.gender ? (emp.gender.charAt(0).toUpperCase() + emp.gender.slice(1)) : '',
-          'Marital Status': emp.marital_status ? (emp.marital_status.charAt(0).toUpperCase() + emp.marital_status.slice(1)) : '',
-          'Blood Group': emp.blood_group || '',
-          'Father Name': emp.father_name || '',
-          'Mother Name': emp.mother_name || '',
-          'Present Address': emp.present_address || emp.address || '',
-          'Permanent Address': emp.permanent_address || emp.address || '',
-          'Aadhaar Number': emp.aadhaar_number || '',
-          'PAN Card Number': emp.pan_number || '',
-          'UAN Number': emp.uan || '',
-          'PF Number': emp.pf_number || '',
-          'ESIC IP Number': emp.esi_number || '',
-          'PF Applicable': emp.pf_applicable !== false ? 'Yes' : 'No',
-          'ESIC Applicable': emp.esic_applicable !== false ? 'Yes' : 'No',
-          'PT Applicable': emp.pt_applicable !== false ? 'Yes' : 'No',
-          'Bank Name': emp.bank_name || '',
-          'Account Number': emp.bank_account_number ? String(emp.bank_account_number) : '',
-          'IFSC Code': emp.ifsc_code || '',
-          'Bank Branch': emp.bank_branch || '',
-          'Emergency Contact Person': emp.emergency_contact_name || '',
-          'Emergency Contact Relation': emp.emergency_contact_relation || '',
-          'Emergency Contact Phone': emp.emergency_contact_phone || '',
-          'Nominee Name': emp.nominee_name || '',
-          'Nominee Relation': emp.nominee_relation || '',
-          'Nominee DOB': emp.nominee_dob ? new Date(emp.nominee_dob).toLocaleDateString('en-IN') : '',
-          'Monthly Fixed Gross (₹)': Number(emp.fixed_gross) || Number(struct.gross_amount) || 0,
-          'Annual CTC (₹)': Number(struct.ctc_amount) || Number(emp.ctc_annual) || (Number(emp.fixed_gross) * 12) || 0,
-          'Basic Salary Monthly (₹)': Number(struct.basic_salary) || Math.round((Number(emp.fixed_gross) || 0) * 0.50),
-          'HRA Monthly (₹)': Number(struct.hra) || Math.round((Number(struct.basic_salary) || ((Number(emp.fixed_gross) || 0) * 0.50)) * 0.40),
-          'Special Allowance Monthly (₹)': Number(struct.special_allowance) || 0,
-          'Employer PF (13%) Monthly (₹)': Number(struct.employer_pf) || 0,
-          'Employer ESIC (3.25%) Monthly (₹)': Number(struct.employer_esic) || 0,
-          'Gratuity Monthly (₹)': Number(struct.gratuity_amount) || 0,
-          'Statutory Bonus Monthly (₹)': Number(struct.statutory_bonus) || 0,
-          'Ex-gratia Monthly (₹)': Number(struct.exgratia_bonus) || 0,
-          'Employee PF (12%) Monthly (₹)': Number(struct.employee_pf) || 0,
-          'Employee ESIC (0.75%) Monthly (₹)': Number(struct.employee_esic) || 0,
-          'Professional Tax (₹)': Number(struct.pt_amount) || 0,
-          'Net Take Home Monthly (₹)': Number(struct.net_take_home) || 0,
+          'Company': emp.company?.name || emp.company_name || matchedInv.company?.name || 'BP Marketing',
+          'Work Location / Office': emp.office?.name || emp.location || matchedInv.office?.name || 'Indore HQ',
+          'City': emp.office?.city || matchedInv.office?.city || 'Indore',
+          'State': emp.office?.state || 'MP',
+          'Department': emp.department || sub.department || matchedInv.department || 'Operations',
+          'Designation': emp.designation || sub.designation || matchedInv.designation || 'Staff',
+          'Role / Access Group': emp.roleDetails?.name || emp.role || 'Staff',
+          'Date of Joining': emp.date_of_joining ? new Date(emp.date_of_joining).toLocaleDateString('en-IN') : (sub.date_of_joining || ''),
+          'Work Email': emp.email || matchedInv.email || '',
+          'Mobile Number': emp.phone || sub.phone || matchedInv.phone || '',
+          'Date of Birth': emp.date_of_birth ? new Date(emp.date_of_birth).toLocaleDateString('en-IN') : (sub.date_of_birth || sub.dob || ''),
+          'Gender': (emp.gender || sub.gender || 'male').toUpperCase(),
+          'Marital Status': (emp.marital_status || sub.marital_status || 'unmarried').toUpperCase(),
+          'Blood Group': emp.blood_group || sub.blood_group || '',
+          'Father / Husband Name': emp.father_or_husband_name || sub.father_or_husband_name || sub.father_husband_name || '',
+          'Present Address': emp.address || sub.present_address || sub.address || '',
+          'Permanent Address': sub.permanent_address || emp.address || sub.address || '',
+          'Aadhaar Number': emp.aadhaar_number || sub.aadhaar_number || sub.aadhaar || '',
+          'PAN Card Number': emp.pan_number || sub.pan_number || sub.pan || '',
+          'UAN Number': emp.uan || sub.uan || '',
+          'PF Number': emp.pf_number || sub.pf_number || '',
+          'ESIC IP Number': emp.esic_number || sub.esic_number || sub.esi_number || '',
+          'PF Applicable': (emp.pf_applicable !== false) ? 'Yes' : 'No',
+          'ESIC Applicable': (emp.esic_applicable !== false) ? 'Yes' : 'No',
+          'Bank Name': emp.bank_name || sub.bank_name || '',
+          'Account Number': emp.bank_account_number ? String(emp.bank_account_number) : (sub.bank_account_number ? String(sub.bank_account_number) : ''),
+          'IFSC Code': emp.ifsc_code || sub.ifsc_code || '',
+          'Payment Mode': emp.payment_mode || sub.payment_mode || 'Bank Transfer',
+          'Emergency Contact Person': emp.emergency_contact_name || sub.emergency_contact_name || '',
+          'Emergency Contact Relation': emp.emergency_contact_relation || sub.emergency_contact_relation || '',
+          'Emergency Contact Phone': emp.emergency_contact_phone || sub.emergency_contact_phone || sub.emergency_phone || '',
+          'Nominee Name': sub.nominee_name || '',
+          'Nominee Relation': sub.nominee_relation || '',
+          'Nominee DOB': sub.nominee_dob ? new Date(sub.nominee_dob).toLocaleDateString('en-IN') : '',
+          'Monthly Fixed Gross (₹)': fixedGross,
+          'Annual CTC (₹)': annualCtc,
+          'Basic Salary Monthly (₹)': basicSalary,
+          'HRA Monthly (₹)': hra,
+          'Special Allowance Monthly (₹)': specialAllowance,
+          'Employer PF (13%) Monthly (₹)': Number(struct.employer_pf) || Math.round(basicSalary * 0.13),
+          'Employer ESIC (3.25%) Monthly (₹)': Number(struct.employer_esic) || (fixedGross <= 21000 ? Math.round(fixedGross * 0.0325) : 0),
+          'Gratuity Monthly (₹)': Number(struct.gratuity_amount) || Math.round(basicSalary * 0.0481),
+          'Statutory Bonus Monthly (₹)': Number(struct.statutory_bonus) || Math.round(basicSalary * 0.0833),
+          'Employee PF (12%) Monthly (₹)': Number(struct.employee_pf) || Math.round(basicSalary * 0.12),
+          'Employee ESIC (0.75%) Monthly (₹)': Number(struct.employee_esic) || (fixedGross <= 21000 ? Math.round(fixedGross * 0.0075) : 0),
+          'Professional Tax (₹)': Number(struct.pt_amount) || 208,
+          'Net Take Home Monthly (₹)': Number(struct.net_take_home) || (fixedGross - (Number(struct.employee_pf) || Math.round(basicSalary * 0.12)) - (fixedGross <= 21000 ? Math.round(fixedGross * 0.0075) : 0) - (Number(struct.pt_amount) || 208)),
           'Shift Timing': `${emp.shift_start_time || '09:30'} - ${emp.shift_end_time || '18:30'}`,
-          'Shift Type': emp.shift_type || 'fixed',
-          'Geofence Tracking': emp.geofence_enabled ? 'Enabled' : 'Disabled',
           'Documents On File': docsList,
-          'Account Created At': emp.createdAt ? new Date(emp.createdAt).toISOString().split('T')[0] : '',
+          'Self-Onboarding Form Status': matchedInv.status ? matchedInv.status.toUpperCase() : (emp.aadhaar_number ? 'VERIFIED' : 'PENDING_SUBMISSION'),
         };
       });
 
-      // Sheet 2: Candidate Onboarding Submissions
+      // Sheet 2: Candidate Onboarding Submissions (All Invitations & Candidate Submitted Records)
       const invRows = invitations.map((inv, idx) => {
-        const sub = typeof inv.submitted_data === 'object' && inv.submitted_data ? inv.submitted_data : {};
+        const sub = (inv.submitted_data && typeof inv.submitted_data === 'object') ? inv.submitted_data : {};
         return {
           'Sr No': idx + 1,
           'Candidate Name': inv.candidate_name || sub.name || '',
           'Email Address': inv.email || '',
           'Mobile Phone': inv.phone || sub.phone || '',
-          'Company': inv.company?.name || '',
-          'Office / Location': inv.office?.name || sub.location || '',
-          'Designation': inv.designation || sub.designation || '',
-          'Department': inv.department || sub.department || '',
+          'Company': inv.company?.name || 'BP Marketing',
+          'Office / Location': inv.office?.name || sub.location || 'Indore HQ',
+          'Designation': inv.designation || sub.designation || 'Executive',
+          'Department': inv.department || sub.department || 'Operations',
           'Offered Monthly Gross (₹)': Number(inv.fixed_gross) || Number(sub.fixed_gross) || 0,
           'Onboarding Status': (inv.status || 'pending').toUpperCase(),
           'Invitation Sent Date': inv.createdAt ? new Date(inv.createdAt).toISOString().split('T')[0] : '',
           'Invitation Expires Date': inv.expires_at ? new Date(inv.expires_at).toISOString().split('T')[0] : '',
           'Approval Date': inv.approved_at ? new Date(inv.approved_at).toISOString().split('T')[0] : 'Pending',
-          'Aadhaar Submitted': sub.aadhaar_number || 'Pending',
-          'PAN Submitted': sub.pan_number || 'Pending',
+          'Aadhaar Submitted': sub.aadhaar_number || sub.aadhaar || 'Pending',
+          'PAN Submitted': sub.pan_number || sub.pan || 'Pending',
+          'UAN Submitted': sub.uan || 'Pending',
+          'PF Number Submitted': sub.pf_number || 'Pending',
+          'ESIC Submitted': sub.esic_number || sub.esi_number || 'Pending',
           'Bank Name Submitted': sub.bank_name || 'Pending',
           'Account No Submitted': sub.bank_account_number ? String(sub.bank_account_number) : 'Pending',
           'IFSC Submitted': sub.ifsc_code || 'Pending',
+          'Father / Husband Name': sub.father_or_husband_name || sub.father_husband_name || 'Pending',
           'Address Submitted': sub.address || sub.present_address || 'Pending',
+          'Emergency Contact Person': sub.emergency_contact_name || 'Pending',
+          'Emergency Contact Phone': sub.emergency_contact_phone || sub.emergency_phone || 'Pending',
+          'Nominee Name': sub.nominee_name || 'Pending',
+          'Nominee Relation': sub.nominee_relation || 'Pending',
           'Appointment Letter Status': sub.appointment_status || 'Not Issued',
           'Appointment Signed At': sub.appointment_signed_at ? new Date(sub.appointment_signed_at).toLocaleString('en-IN') : 'Pending',
           'Rejection Reason': inv.rejection_reason || 'N/A',
         };
       });
 
+      // Sheet 3: Salary & Statutory Structure Master (Wage Code 2026 Compliant)
+      const salaryRows = employees.map((emp, idx) => {
+        const struct = (emp.salaryStructures && emp.salaryStructures[0]) || {};
+        const matchedInv = invMap[emp.email?.trim().toLowerCase()] || invMap[emp.phone?.trim()] || {};
+        const sub = (matchedInv.submitted_data && typeof matchedInv.submitted_data === 'object') ? matchedInv.submitted_data : {};
+        const gross = Number(emp.fixed_gross) || Number(struct.fixed_gross) || Number(sub.fixed_gross) || 0;
+        const basic = Number(struct.basic_salary) || Number(emp.basic_salary) || Math.round(gross * 0.50);
+        const hra = Number(struct.hra) || Math.round(basic * 0.40);
+        const special = Number(struct.special_allowance) || Math.max(0, gross - basic - hra);
+        const ctc = Number(struct.annual_ctc) || Number(emp.annual_ctc) || (gross * 12);
+        const erPf = Number(struct.employer_pf) || Math.round(basic * 0.13);
+        const erEsic = Number(struct.employer_esic) || (gross <= 21000 ? Math.round(gross * 0.0325) : 0);
+        const gratuity = Number(struct.gratuity_amount) || Math.round(basic * 0.0481);
+        const bonus = Number(struct.statutory_bonus) || Math.round(basic * 0.0833);
+        const eePf = Number(struct.employee_pf) || Math.round(basic * 0.12);
+        const eeEsic = Number(struct.employee_esic) || (gross <= 21000 ? Math.round(gross * 0.0075) : 0);
+        const pt = Number(struct.pt_amount) || 208;
+        const netTakeHome = Number(struct.net_take_home) || (gross - eePf - eeEsic - pt);
+
+        return {
+          'Sr No': idx + 1,
+          'Employee ID': emp.emp_code || '',
+          'Employee Name': emp.name || '',
+          'Designation': emp.designation || '',
+          'Department': emp.department || '',
+          'Location': emp.office?.name || emp.location || '',
+          'Annual CTC (₹)': ctc,
+          'Monthly Fixed Gross (₹)': gross,
+          'Basic Salary (50%)': basic,
+          'HRA (40% of Basic)': hra,
+          'Special Allowance': special,
+          'Employer PF (13%)': erPf,
+          'Employer ESIC (3.25%)': erEsic,
+          'Gratuity (4.81%)': gratuity,
+          'Statutory Bonus (8.33%)': bonus,
+          'Total Employer Statutory': erPf + erEsic + gratuity + bonus,
+          'Employee PF (12%)': eePf,
+          'Employee ESIC (0.75%)': eeEsic,
+          'Professional Tax (PT)': pt,
+          'Total Employee Deductions': eePf + eeEsic + pt,
+          'Net Monthly Take Home': netTakeHome,
+          'Structure Status': struct.id ? 'Configured' : 'Wage Code Default Applied',
+        };
+      });
+
       const wb = XLSX.utils.book_new();
 
+      // Sheet 1
       const ws1 = XLSX.utils.json_to_sheet(empRows);
       const colWidths1 = Object.keys(empRows[0] || {}).map(key => ({
-        wch: Math.max(key.length, 14)
+        wch: Math.max(key.length, 16)
       }));
       ws1['!cols'] = colWidths1;
       XLSX.utils.book_append_sheet(wb, ws1, 'Employee Onboarding Master');
 
+      // Sheet 2
       if (invRows.length > 0) {
         const ws2 = XLSX.utils.json_to_sheet(invRows);
         const colWidths2 = Object.keys(invRows[0] || {}).map(key => ({
-          wch: Math.max(key.length, 14)
+          wch: Math.max(key.length, 16)
         }));
         ws2['!cols'] = colWidths2;
         XLSX.utils.book_append_sheet(wb, ws2, 'Candidate Submissions');
       }
+
+      // Sheet 3
+      const ws3 = XLSX.utils.json_to_sheet(salaryRows);
+      const colWidths3 = Object.keys(salaryRows[0] || {}).map(key => ({
+        wch: Math.max(key.length, 16)
+      }));
+      ws3['!cols'] = colWidths3;
+      XLSX.utils.book_append_sheet(wb, ws3, 'Salary & Statutory Master');
 
       const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
       const filename = `Employee_Onboarding_Master_${new Date().toISOString().split('T')[0]}.xlsx`;
