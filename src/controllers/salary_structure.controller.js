@@ -785,12 +785,25 @@ class SalaryStructureController {
         'Earned Basic', 'Earned HRA', 'Earned Other Allowances', 'Arrears', 'Bonus', 'Incentive', 'Gross Earnings',
         'PF Applicable', 'Employee PF', 'ESIC Applicable', 'Employee ESIC', 'Professional Tax (PT)',
         'Loan EMI', 'Other Deductions', 'Total Deductions', 'Net Salary',
-        'Employer PF', 'Employer ESIC', 'Gratuity', 'Total Employer Cost', 'Total Monthly CTC', 'Annual CTC', 'Status'
+        'Employer PF', 'Employer ESIC', 'Gratuity', 'Total Employer Cost', 'Total Monthly CTC', 'Annual CTC', 'Status',
+        'Payment Mode', 'PAN Number', 'UAN Number'
       ];
 
       ledgerHeaders.forEach((h, colIdx) => {
         const cellRef = XLSX.utils.encode_cell({ r: 0, c: colIdx });
         wsLedger[cellRef] = { t: 's', v: h };
+      });
+
+      // Build Dedicated Bank_Disbursement Sheet
+      const wsBank = {};
+      const bankHeaders = [
+        'Sr No', 'Employee Code', 'Beneficiary Name', 'Company', 'Branch / Location',
+        'Bank Name', 'Account Number', 'IFSC Code', 'Payment Mode', 'Net Salary Payable (₹)',
+        'PAN Number', 'Narration / Remarks'
+      ];
+      bankHeaders.forEach((h, colIdx) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 0, c: colIdx });
+        wsBank[cellRef] = { t: 's', v: h };
       });
 
       employees.forEach((emp, index) => {
@@ -839,9 +852,16 @@ class SalaryStructureController {
         wsLedger[`F${r}`] = { t: 's', v: emp.company?.name || 'BP Marketing' };
         wsLedger[`G${r}`] = { t: 's', v: emp.office?.city || emp.office?.name || 'Indore' };
         wsLedger[`H${r}`] = { t: 's', v: struct?.state || emp.office?.state || 'MP' };
-        wsLedger[`I${r}`] = { t: 's', v: emp.bank_name || '—' };
-        wsLedger[`J${r}`] = { t: 's', v: emp.bank_account_no || '—' };
-        wsLedger[`K${r}`] = { t: 's', v: emp.bank_ifsc || '—' };
+        const bankName = emp.bank_name || emp.bankName || '—';
+        const bankAccount = emp.bank_account_number || emp.bank_account_no || emp.accountNumber || '—';
+        const ifsc = emp.ifsc_code || emp.bank_ifsc || emp.ifscCode || '—';
+        const paymentMode = emp.payment_mode || 'Bank Transfer';
+        const panNumber = emp.pan_number || '—';
+        const uanNumber = emp.uan || '—';
+
+        wsLedger[`I${r}`] = { t: 's', v: String(bankName) };
+        wsLedger[`J${r}`] = { t: 's', v: String(bankAccount) };
+        wsLedger[`K${r}`] = { t: 's', v: String(ifsc) };
         wsLedger[`L${r}`] = { t: 'n', v: daysInMonth };
         wsLedger[`M${r}`] = { t: 'n', v: absentDays };
         wsLedger[`N${r}`] = { t: 'n', f: `L${r}-M${r}`, v: payableDays };
@@ -872,15 +892,44 @@ class SalaryStructureController {
         wsLedger[`AM${r}`] = { t: 'n', f: `Y${r}+AL${r}`, v: monthlyCtc };
         wsLedger[`AN${r}`] = { t: 'n', f: `AM${r}*12`, v: annualCtc };
         wsLedger[`AO${r}`] = { t: 's', v: 'Verified' };
+        wsLedger[`AP${r}`] = { t: 's', v: String(paymentMode) };
+        wsLedger[`AQ${r}`] = { t: 's', v: String(panNumber) };
+        wsLedger[`AR${r}`] = { t: 's', v: String(uanNumber) };
+
+        // Populate Bank_Disbursement row
+        wsBank[`A${r}`] = { t: 'n', v: index + 1 };
+        wsBank[`B${r}`] = { t: 's', v: String(emp.emp_code || '') };
+        wsBank[`C${r}`] = { t: 's', v: String(emp.name || '') };
+        wsBank[`D${r}`] = { t: 's', v: String(emp.company?.name || 'BP Marketing') };
+        wsBank[`E${r}`] = { t: 's', v: String(emp.office?.city || emp.office?.name || 'Indore') };
+        wsBank[`F${r}`] = { t: 's', v: String(bankName) };
+        wsBank[`G${r}`] = { t: 's', v: String(bankAccount) };
+        wsBank[`H${r}`] = { t: 's', v: String(ifsc) };
+        wsBank[`I${r}`] = { t: 's', v: String(paymentMode) };
+        wsBank[`J${r}`] = { t: 'n', f: `'Monthly_Payroll_Ledger'!AH${r}`, v: net };
+        wsBank[`K${r}`] = { t: 's', v: String(panNumber) };
+        wsBank[`L${r}`] = { t: 's', v: 'Salary Disbursement' };
       });
 
       const lastRow = employees.length + 1;
       const totRow = lastRow + 1;
+
+      // Summary Row for Ledger
       wsLedger[`A${totRow}`] = { t: 's', v: 'TOTAL' };
       ['O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'AA', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI', 'AJ', 'AK', 'AL', 'AM', 'AN'].forEach(col => {
         wsLedger[`${col}${totRow}`] = { t: 'n', f: `SUM(${col}2:${col}${lastRow})` };
       });
-      wsLedger['!ref'] = `A1:AO${totRow}`;
+      wsLedger['!ref'] = `A1:AR${totRow}`;
+
+      // Summary Row & Column Widths for Bank_Disbursement
+      wsBank[`A${totRow}`] = { t: 's', v: 'TOTAL' };
+      wsBank[`J${totRow}`] = { t: 'n', f: `SUM(J2:J${lastRow})` };
+      wsBank['!ref'] = `A1:L${totRow}`;
+      wsBank['!cols'] = [
+        { wch: 8 }, { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 20 },
+        { wch: 22 }, { wch: 22 }, { wch: 15 }, { wch: 16 }, { wch: 22 },
+        { wch: 15 }, { wch: 30 }
+      ];
 
       // 2. Populate Sheet 2: CTC_Calculator
       if (wb.Sheets['CTC_Calculator']) {
@@ -1044,9 +1093,10 @@ class SalaryStructureController {
         solverWs['!ref'] = `A1:BH${maxCalcRow}`;
       }
 
-      // Reorder sheets with Monthly_Payroll_Ledger first
-      wb.SheetNames = ['Monthly_Payroll_Ledger', 'CTC_Calculator', 'Solver', 'Minimum Wages', 'PT'];
+      // Reorder sheets with Monthly_Payroll_Ledger & Bank_Disbursement first
+      wb.SheetNames = ['Monthly_Payroll_Ledger', 'Bank_Disbursement', 'CTC_Calculator', 'Solver', 'Minimum Wages', 'PT'];
       wb.Sheets['Monthly_Payroll_Ledger'] = wsLedger;
+      wb.Sheets['Bank_Disbursement'] = wsBank;
 
       const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
