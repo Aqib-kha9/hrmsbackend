@@ -160,6 +160,12 @@ Tour.belongsTo(Employee, { foreignKey: { name: 'employee_id', allowNull: false }
 // Tour → Employee (creator / admin who assigned the tour)
 Tour.belongsTo(Employee, { foreignKey: { name: 'created_by', allowNull: true }, as: 'creator', onDelete: 'SET NULL' });
 Employee.hasMany(Tour, { foreignKey: { name: 'created_by', allowNull: true }, as: 'createdTours', onDelete: 'SET NULL' });
+// Tour → Employee (approver)
+Tour.belongsTo(Employee, { foreignKey: { name: 'approved_by', allowNull: true }, as: 'approver', onDelete: 'SET NULL' });
+Employee.hasMany(Tour, { foreignKey: { name: 'approved_by', allowNull: true }, as: 'approvedTours', onDelete: 'SET NULL' });
+// Tour → Employee (rejecter)
+Tour.belongsTo(Employee, { foreignKey: { name: 'rejected_by', allowNull: true }, as: 'rejecter', onDelete: 'SET NULL' });
+Employee.hasMany(Tour, { foreignKey: { name: 'rejected_by', allowNull: true }, as: 'rejectedTours', onDelete: 'SET NULL' });
 // Tour → Employee (canceller)
 Tour.belongsTo(Employee, { foreignKey: { name: 'cancelled_by', allowNull: true }, as: 'canceller', onDelete: 'SET NULL' });
 Employee.hasMany(Tour, { foreignKey: { name: 'cancelled_by', allowNull: true }, as: 'cancelledTours', onDelete: 'SET NULL' });

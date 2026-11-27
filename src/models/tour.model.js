@@ -60,17 +60,46 @@ const Tour = sequelize.define('Tour', {
     },
   },
   status: {
-    type: DataTypes.ENUM('active', 'completed', 'cancelled'),
+    type: DataTypes.ENUM('pending', 'approved', 'rejected', 'active', 'completed', 'cancelled'),
     allowNull: false,
-    defaultValue: 'active',
-    comment: 'active = ongoing/upcoming, completed = finished, cancelled = revoked',
+    defaultValue: 'pending',
+    comment: 'pending = requested by employee, approved = confirmed, rejected = declined, active = ongoing, completed = finished, cancelled = revoked',
+  },
+  advance_amount: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
   },
   created_by: {
     type: DataTypes.INTEGER,
     allowNull: true,
     references: { model: 'employees', key: 'id' },
     onDelete: 'SET NULL',
-    comment: 'Admin/HR who created the tour',
+    comment: 'Admin/HR who created or employee who requested the tour',
+  },
+  approved_by: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'employees', key: 'id' },
+    onDelete: 'SET NULL',
+  },
+  approved_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  rejected_by: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    references: { model: 'employees', key: 'id' },
+    onDelete: 'SET NULL',
+  },
+  rejected_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+  rejection_reason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
   },
   cancelled_by: {
     type: DataTypes.INTEGER,

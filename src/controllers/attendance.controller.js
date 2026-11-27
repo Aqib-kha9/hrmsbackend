@@ -273,6 +273,78 @@ class AttendanceController {
     }
   }
 
+  // Employee: Request a new tour
+  async requestTour(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const { title, description, fromLocation, toLocation, startDate, endDate, advanceAmount } = req.body;
+      const result = await attendanceService.requestTour(employeeId, {
+        title, description, fromLocation, toLocation, startDate, endDate, advanceAmount,
+      });
+      return success(res, result.message || 'Tour request submitted successfully', result.tour, 201);
+    } catch (err) {
+      logger.error(`Request tour error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Employee: Get own tour requests
+  async getMyTours(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const { status, page, limit } = req.query;
+      const result = await attendanceService.getMyTours(employeeId, {
+        status,
+        page: page ? Number(page) : 1,
+        limit: limit ? Number(limit) : 50,
+      });
+      return paginated(res, 'My tours fetched', result.tours, result.pagination, 200);
+    } catch (err) {
+      logger.error(`Get my tours error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Employee: Withdraw own pending tour request
+  async withdrawTour(req, res, next) {
+    try {
+      const employeeId = req.employee.id;
+      const { id } = req.params;
+      const result = await attendanceService.withdrawTour(id, employeeId);
+      return success(res, result.message || 'Tour withdrawn successfully', result.tour, 200);
+    } catch (err) {
+      logger.error(`Withdraw tour error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Admin/HR: Approve a tour request
+  async approveTour(req, res, next) {
+    try {
+      const adminId = req.employee.id;
+      const { id } = req.params;
+      const result = await attendanceService.approveTour(id, adminId);
+      return success(res, result.message || 'Tour approved successfully', result, 200);
+    } catch (err) {
+      logger.error(`Approve tour error: ${err.message}`);
+      return next(err);
+    }
+  }
+
+  // Admin/HR: Reject a tour request
+  async rejectTour(req, res, next) {
+    try {
+      const adminId = req.employee.id;
+      const { id } = req.params;
+      const { reason } = req.body;
+      const result = await attendanceService.rejectTour(id, adminId, reason);
+      return success(res, result.message || 'Tour request rejected', result, 200);
+    } catch (err) {
+      logger.error(`Reject tour error: ${err.message}`);
+      return next(err);
+    }
+  }
+
   // Employee: Check if currently on tour (mobile app)
   async getTourStatus(req, res, next) {
     try {

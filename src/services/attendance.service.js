@@ -2291,14 +2291,18 @@ class AttendanceService {
       }
     }
 
-    const empInclude = { model: Employee, as: 'employee', attributes: ['id', 'employee_id', 'first_name', 'last_name', 'email', 'office_id', 'company_id'], include: [] };
+    const empInclude = {
+      model: Employee,
+      as: 'employee',
+      attributes: ['id', 'emp_code', 'name', 'email', 'department', 'designation', 'office_id', 'company_id'],
+      include: []
+    };
     const empWhere = {};
     if (search) {
       empWhere[Op.or] = [
-        { first_name: { [Op.iLike]: `%${search}%` } },
-        { last_name: { [Op.iLike]: `%${search}%` } },
-        { employee_id: { [Op.iLike]: `%${search}%` } },
-        { email: { [Op.iLike]: `%${search}%` } },
+        { name: { [Op.like]: `%${search}%` } },
+        { emp_code: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } },
       ];
     }
     if (office_id) empWhere.office_id = office_id;
@@ -2311,7 +2315,10 @@ class AttendanceService {
       where,
       include: [
         empInclude,
-        { model: Employee, as: 'creator', attributes: ['id', 'first_name', 'last_name', 'employee_id'] },
+        { model: Employee, as: 'creator', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'approver', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'rejecter', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'canceller', attributes: ['id', 'emp_code', 'name'] },
       ],
       order: [['start_date', 'DESC'], ['id', 'DESC']],
       limit,
@@ -2326,14 +2333,250 @@ class AttendanceService {
   }
 
   /**
+   * Employee: Submit a new tour request.
+   */
+  async requestTour(employeeId, { title, description, fromLocation, toLocation, startDate, endDate, advanceAmount }) {
+    if (!startDate || !endDate) {
+      const err = new Error('Start date and end date are required');
+      err.status = 400;
+      throw err;
+    }
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      const err = new Error('Invalid start date or end date');
+      err.status = 400;
+      throw err;
+    }
+    if (end < start) {
+      const err = new Error('End date cannot be before start date');
+      err.status = 400;
+      throw err;
+    }
+
+    // Check for overlapping active, approved, or pending tours for this employee
+    const overlap = await Tour.findOne({
+      where: {
+        employee_id: employeeId,
+        status: { [Op.in]: ['pending', 'approved', 'active'] },
+        [Op.or]: [
+          { start_date: { [Op.between]: [startDate, endDate] } },
+          { end_date: { [Op.between]: [startDate, endDate] } },
+          { [Op.and]: [{ start_date: { [Op.lte]: startDate } }, { end_date: { [Op.gte]: endDate } }] },
+        ],
+      },
+    });
+    if (overlap) {
+      const err = new Error(`An overlapping tour (${overlap.tour_code}) already exists for this date range with status '${overlap.status}'.`);
+      err.status = 409;
+      throw err;
+    }
+
+    const tourCode = await this._generateTourCode();
+    const tour = await Tour.create({
+      tour_code: tourCode,
+      employee_id: employeeId,
+      title,
+      description: description || null,
+      from_location: fromLocation || null,
+      to_location: toLocation || null,
+      start_date: startDate,
+      end_date: endDate,
+      status: 'pending',
+      advance_amount: Number(advanceAmount) || 0,
+      created_by: employeeId,
+    });
+
+    return {
+      tour,
+      message: 'Tour request submitted successfully and pending approval.',
+    };
+  }
+
+  /**
+   * Employee: Get all their own tours.
+   */
+  async getMyTours(employeeId, { status, page = 1, limit = 50 } = {}) {
+    const where = { employee_id: employeeId };
+    if (status && status !== 'all') {
+      where.status = status;
+    }
+    const offset = (page - 1) * limit;
+    const { rows, count } = await Tour.findAndCountAll({
+      where,
+      include: [
+        { model: Employee, as: 'approver', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'rejecter', attributes: ['id', 'emp_code', 'name'] },
+      ],
+      order: [['start_date', 'DESC'], ['id', 'DESC']],
+      limit,
+      offset,
+    });
+    return {
+      tours: rows,
+      pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
+    };
+  }
+
+  /**
+   * Employee: Withdraw their own pending tour request.
+   */
+  async withdrawTour(tourId, employeeId) {
+    const tour = await Tour.findByPk(tourId);
+    if (!tour) {
+      const err = new Error('Tour not found');
+      err.status = 404;
+      throw err;
+    }
+    if (tour.employee_id !== employeeId) {
+      const err = new Error('You can only withdraw your own tour requests');
+      err.status = 403;
+      throw err;
+    }
+    if (tour.status !== 'pending') {
+      const err = new Error(`Only pending tour requests can be withdrawn. Current status: ${tour.status}`);
+      err.status = 400;
+      throw err;
+    }
+    await tour.update({
+      status: 'cancelled',
+      cancelled_by: employeeId,
+      cancelled_at: new Date(),
+      cancel_reason: 'Withdrawn by employee',
+    });
+    return { tour, message: 'Tour request withdrawn successfully' };
+  }
+
+  /**
+   * Admin/HR: Approve a tour request. Automatically marks attendance as tour.
+   */
+  async approveTour(tourId, adminId) {
+    const tour = await Tour.findByPk(tourId);
+    if (!tour) {
+      const err = new Error('Tour not found');
+      err.status = 404;
+      throw err;
+    }
+    if (tour.status !== 'pending') {
+      const err = new Error(`Only pending tour requests can be approved. Current status: ${tour.status}`);
+      err.status = 400;
+      throw err;
+    }
+
+    const todayStr = getLocalDateString();
+    const finalStatus = (tour.start_date <= todayStr && tour.end_date >= todayStr) ? 'active' : 'approved';
+
+    const transaction = await sequelize.transaction();
+    try {
+      await tour.update({
+        status: finalStatus,
+        approved_by: adminId,
+        approved_at: new Date(),
+      }, { transaction });
+
+      // Automatically generate attendance records with status='tour' for working days in range
+      const weekendDays = await _getWeekendDays();
+      const createdRecords = [];
+      const start = new Date(tour.start_date);
+      const end = new Date(tour.end_date);
+      const cursor = new Date(start);
+
+      while (cursor <= end) {
+        const dateStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+        if (!weekendDays.includes(cursor.getDay())) {
+          const holidayName = await _getHolidayName(dateStr);
+          if (!holidayName) {
+            const existing = await AttendanceRecord.findOne({
+              where: { employee_id: tour.employee_id, date: dateStr },
+              transaction,
+            });
+            if (existing) {
+              await existing.update({
+                status: 'tour',
+                check_in_time: null,
+                check_out_time: null,
+                total_minutes: 0,
+                late_by_minutes: 0,
+                early_exit_minutes: 0,
+                remarks: `On tour: ${tour.title} (${tour.tour_code})`,
+              }, { transaction });
+              createdRecords.push(existing);
+            } else {
+              const rec = await AttendanceRecord.create({
+                employee_id: tour.employee_id,
+                date: dateStr,
+                status: 'tour',
+                total_minutes: 0,
+                remarks: `On tour: ${tour.title} (${tour.tour_code})`,
+              }, { transaction });
+              createdRecords.push(rec);
+            }
+          }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      await transaction.commit();
+
+      // Recalculate monthly attendance
+      const affectedMonths = new Set();
+      const c2 = new Date(start);
+      while (c2 <= end) {
+        affectedMonths.add(`${c2.getFullYear()}-${c2.getMonth() + 1}`);
+        c2.setMonth(c2.getMonth() + 1);
+      }
+      for (const key of affectedMonths) {
+        const [yr, mo] = key.split('-').map(Number);
+        const anyDate = new Date(yr, mo - 1, 15);
+        await this._updateMonthlyAttendance(tour.employee_id, `${yr}-${String(mo).padStart(2, '0')}-${String(anyDate.getDate()).padStart(2, '0')}`);
+      }
+
+      return {
+        tour,
+        attendanceRecordsCreated: createdRecords.length,
+        message: `Tour approved successfully. ${createdRecords.length} working day(s) marked as tour (paid).`,
+      };
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  }
+
+  /**
+   * Admin/HR: Reject a tour request with reason.
+   */
+  async rejectTour(tourId, adminId, reason) {
+    const tour = await Tour.findByPk(tourId);
+    if (!tour) {
+      const err = new Error('Tour not found');
+      err.status = 404;
+      throw err;
+    }
+    if (tour.status !== 'pending') {
+      const err = new Error(`Only pending tour requests can be rejected. Current status: ${tour.status}`);
+      err.status = 400;
+      throw err;
+    }
+    await tour.update({
+      status: 'rejected',
+      rejected_by: adminId,
+      rejected_at: new Date(),
+      rejection_reason: reason || 'Declined by Admin/HR',
+    });
+    return { tour, message: 'Tour request rejected' };
+  }
+
+  /**
    * Get a single tour by ID with its attendance records.
    */
   async getTourById(tourId) {
     const tour = await Tour.findByPk(tourId, {
       include: [
-        { model: Employee, as: 'employee', attributes: ['id', 'employee_id', 'first_name', 'last_name', 'email'] },
-        { model: Employee, as: 'creator', attributes: ['id', 'first_name', 'last_name', 'employee_id'] },
-        { model: Employee, as: 'canceller', attributes: ['id', 'first_name', 'last_name', 'employee_id'] },
+        { model: Employee, as: 'employee', attributes: ['id', 'emp_code', 'name', 'email', 'department', 'designation'] },
+        { model: Employee, as: 'creator', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'approver', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'rejecter', attributes: ['id', 'emp_code', 'name'] },
+        { model: Employee, as: 'canceller', attributes: ['id', 'emp_code', 'name'] },
       ],
     });
     if (!tour) {
@@ -2433,7 +2676,7 @@ class AttendanceService {
     const activeTour = await Tour.findOne({
       where: {
         employee_id: employeeId,
-        status: 'active',
+        status: { [Op.in]: ['active', 'approved'] },
         start_date: { [Op.lte]: todayStr },
         end_date: { [Op.gte]: todayStr },
       },
@@ -2455,6 +2698,7 @@ class AttendanceService {
         to_location: activeTour.to_location,
         start_date: activeTour.start_date,
         end_date: activeTour.end_date,
+        status: activeTour.status,
       },
     };
   }

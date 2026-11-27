@@ -12,6 +12,8 @@ const {
   adminHistoryQuerySchema,
   adminMonthlyQuerySchema,
   markTourSchema,
+  requestTourSchema,
+  rejectTourSchema,
   tourListQuerySchema,
   cancelTourSchema,
   weeklyOffConfigSchema,
@@ -51,9 +53,19 @@ router.post('/admin/tours', requirePermission('attendance:create'), validate(mar
 router.get('/admin/tours', requirePermission('attendance:read'), validate(tourListQuerySchema, 'query'), attendanceController.getAllTours);
 // Admin/HR: Get a single tour by ID (with attendance records)
 router.get('/admin/tours/:id', requirePermission('attendance:read'), attendanceController.getTourById);
+// Admin/HR: Approve a tour request (creates tour attendance records)
+router.patch('/admin/tours/:id/approve', requirePermission('attendance:update'), attendanceController.approveTour);
+// Admin/HR: Reject a tour request
+router.patch('/admin/tours/:id/reject', requirePermission('attendance:update'), validate(rejectTourSchema), attendanceController.rejectTour);
 // Admin/HR: Cancel a tour (past days → absent, future days → deleted)
 router.patch('/admin/tours/:id/cancel', requirePermission('attendance:update'), validate(cancelTourSchema), attendanceController.cancelTour);
 
+// Employee: Request a tour
+router.post('/tours/request', validate(requestTourSchema), attendanceController.requestTour);
+// Employee: Get own tours list
+router.get('/tours/my-tours', attendanceController.getMyTours);
+// Employee: Withdraw own pending tour
+router.patch('/tours/:id/withdraw', attendanceController.withdrawTour);
 // Employee: Check if currently on tour (mobile app punch screen)
 router.get('/tour-status', attendanceController.getTourStatus);
 

@@ -145,11 +145,48 @@ const markTourSchema = Joi.object({
   return value;
 });
 
+const requestTourSchema = Joi.object({
+  title: Joi.string().trim().min(3).max(200).required()
+    .messages({
+      'string.empty': 'Tour title is required',
+      'string.min': 'Tour title must be at least 3 characters',
+      'any.required': 'Tour title is required',
+    }),
+  description: Joi.string().allow('', null).max(2000).optional(),
+  fromLocation: Joi.string().allow('', null).max(150).optional(),
+  toLocation: Joi.string().allow('', null).max(150).optional(),
+  startDate: Joi.string().regex(/^\d{4}-\d{2}-\d{2}$/).required()
+    .messages({
+      'string.pattern.base': 'Start date must be in YYYY-MM-DD format',
+      'any.required': 'Start date is required',
+    }),
+  endDate: Joi.string().regex(/^\d{4}-\d{2}-\d{2}$/).required()
+    .messages({
+      'string.pattern.base': 'End date must be in YYYY-MM-DD format',
+      'any.required': 'End date is required',
+    }),
+  advanceAmount: Joi.number().min(0).optional(),
+}).custom((value, helpers) => {
+  if (value.endDate < value.startDate) {
+    return helpers.error('any.invalid', { message: 'End date cannot be before start date' });
+  }
+  return value;
+});
+
+const rejectTourSchema = Joi.object({
+  reason: Joi.string().trim().min(2).max(500).required()
+    .messages({
+      'string.empty': 'Rejection reason is required',
+      'string.min': 'Rejection reason must be at least 2 characters',
+      'any.required': 'Rejection reason is required',
+    }),
+});
+
 const tourListQuerySchema = Joi.object({
   page: Joi.number().integer().min(1).optional(),
   limit: Joi.number().integer().min(1).max(100).optional(),
   search: Joi.string().allow('', null).optional(),
-  status: Joi.string().valid('active', 'completed', 'cancelled').optional(),
+  status: Joi.string().valid('pending', 'approved', 'rejected', 'active', 'completed', 'cancelled').optional(),
   employee_id: Joi.number().integer().optional(),
   from: Joi.date().iso().optional(),
   to: Joi.date().iso().optional(),
@@ -204,6 +241,8 @@ module.exports = {
   adminHistoryQuerySchema,
   adminMonthlyQuerySchema,
   markTourSchema,
+  requestTourSchema,
+  rejectTourSchema,
   tourListQuerySchema,
   cancelTourSchema,
   weeklyOffConfigSchema,
