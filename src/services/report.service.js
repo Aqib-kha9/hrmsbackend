@@ -1,4 +1,4 @@
-const { Employee, MonthlyAttendance, PayrollEntry, PayrollCycle, Office, Company, TourExpense, sequelize } = require('../models');
+const { Employee, MonthlyAttendance, PayrollEntry, PayrollCycle, Office, Company, TourExpense, SalaryStructure, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const logger = require('../utils/logger');
 const { PT_SLABS } = require('../utils/constants');
@@ -172,14 +172,18 @@ class ReportService {
         ? (Number(monthly.absent_days) + Number(monthly.half_days) * 0.5)
         : (entry ? entry.absent_days : 0);
 
-      const activeStructure = emp.salaryStructures?.find(s => s.status === 'active');
-      const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : true;
+      const activeStructure = emp.salaryStructures?.find(s => s.status === 'active') || (emp.salaryStructures && emp.salaryStructures[0]) || null;
+      const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : (emp.pt_applicable !== false);
+      const fixedGross = Number(activeStructure?.fixed_gross) || Number(emp.fixed_gross) || 0;
+      const pfApplicable = activeStructure ? (activeStructure.pf_applicable !== false) : (emp.pf_applicable !== false);
+      const pfCeiling = activeStructure ? (activeStructure.pf_ceiling || false) : (emp.pf_ceiling || false);
+      const esicApplicable = activeStructure ? (activeStructure.esic_applicable || false) : (emp.esic_applicable || false);
 
       const calc = this._calculateRow({
-        fixed_gross: emp.fixed_gross,
-        pf_applicable: emp.pf_applicable,
-        pf_ceiling: emp.pf_ceiling,
-        esic_applicable: emp.esic_applicable,
+        fixed_gross: fixedGross,
+        pf_applicable: pfApplicable,
+        pf_ceiling: pfCeiling,
+        esic_applicable: esicApplicable,
         pt_applicable: ptApplicable,
         absent_days: absentDays,
         previous_arrears: entry ? entry.previous_arrears : 0,
@@ -196,10 +200,10 @@ class ReportService {
         location: emp.location || emp.office?.city || 'Unknown',
         company: emp.company_name || emp.company?.name || 'Apaar Logistics',
         designation: emp.designation || '',
-        fixedGross: Number(emp.fixed_gross) || 0,
-        pfApplicable: emp.pf_applicable,
-        pfCeiling: emp.pf_ceiling,
-        esicApplicable: emp.esic_applicable,
+        fixedGross: fixedGross,
+        pfApplicable: pfApplicable,
+        pfCeiling: pfCeiling,
+        esicApplicable: esicApplicable,
         absentDays: Math.round(absentDays * 10) / 10,
         bonus: Number(entry?.bonus) || 0,
         previousArrears: Number(entry?.previous_arrears) || 0,
@@ -314,11 +318,19 @@ class ReportService {
         ? (Number(monthly.absent_days) + Number(monthly.half_days) * 0.5)
         : (entry ? entry.absent_days : 0);
 
+      const activeStructure = emp.salaryStructures?.find(s => s.status === 'active') || (emp.salaryStructures && emp.salaryStructures[0]) || null;
+      const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : (emp.pt_applicable !== false);
+      const fixedGross = Number(activeStructure?.fixed_gross) || Number(emp.fixed_gross) || 0;
+      const pfApplicable = activeStructure ? (activeStructure.pf_applicable !== false) : (emp.pf_applicable !== false);
+      const pfCeiling = activeStructure ? (activeStructure.pf_ceiling || false) : (emp.pf_ceiling || false);
+      const esicApplicable = activeStructure ? (activeStructure.esic_applicable || false) : (emp.esic_applicable || false);
+
       const calc = this._calculateRow({
-        fixed_gross: emp.fixed_gross,
-        pf_applicable: emp.pf_applicable,
-        pf_ceiling: emp.pf_ceiling,
-        esic_applicable: emp.esic_applicable,
+        fixed_gross: fixedGross,
+        pf_applicable: pfApplicable,
+        pf_ceiling: pfCeiling,
+        esic_applicable: esicApplicable,
+        pt_applicable: ptApplicable,
         absent_days: absentDays,
         previous_arrears: entry ? entry.previous_arrears : 0,
         bonus: entry ? entry.bonus : 0,
@@ -403,11 +415,19 @@ class ReportService {
         ? (Number(monthly.absent_days) + Number(monthly.half_days) * 0.5)
         : (entry ? entry.absent_days : 0);
 
+      const activeStructure = emp.salaryStructures?.find(s => s.status === 'active') || (emp.salaryStructures && emp.salaryStructures[0]) || null;
+      const ptApplicable = activeStructure ? (activeStructure.pt_applicable !== false) : (emp.pt_applicable !== false);
+      const fixedGross = Number(activeStructure?.fixed_gross) || Number(emp.fixed_gross) || 0;
+      const pfApplicable = activeStructure ? (activeStructure.pf_applicable !== false) : (emp.pf_applicable !== false);
+      const pfCeiling = activeStructure ? (activeStructure.pf_ceiling || false) : (emp.pf_ceiling || false);
+      const esicApplicable = activeStructure ? (activeStructure.esic_applicable || false) : (emp.esic_applicable || false);
+
       const calc = this._calculateRow({
-        fixed_gross: emp.fixed_gross,
-        pf_applicable: emp.pf_applicable,
-        pf_ceiling: emp.pf_ceiling,
-        esic_applicable: emp.esic_applicable,
+        fixed_gross: fixedGross,
+        pf_applicable: pfApplicable,
+        pf_ceiling: pfCeiling,
+        esic_applicable: esicApplicable,
+        pt_applicable: ptApplicable,
         absent_days: absentDays,
         previous_arrears: entry ? entry.previous_arrears : 0,
         bonus: entry ? entry.bonus : 0,
