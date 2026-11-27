@@ -734,6 +734,48 @@ class SalaryStructureController {
         wb = XLSX.utils.book_new();
       }
 
+      // Sanitize Defined Names (eliminates "Removed Records: Named range from /xl/workbook.xml")
+      wb.Workbook = wb.Workbook || {};
+      wb.Workbook.Names = [
+        {
+          Name: 'CategoryList',
+          Ref: "OFFSET('Minimum Wages'!$I$2,0,0,MAX(1,COUNTIF('Minimum Wages'!$I$2:$I$300,\"*\")),1)",
+        },
+        {
+          Name: 'StateList',
+          Ref: "OFFSET('Minimum Wages'!$G$2,0,0,MAX(1,COUNTIF('Minimum Wages'!$G$2:$G$300,\"*\")),1)",
+        },
+        {
+          Name: 'PT_State_List',
+          Ref: 'PT!$T$3:$T$34',
+        },
+      ];
+
+      // Clean PT sheet (eliminates "Removed Records: Formula from /xl/worksheets/sheet5.xml")
+      const ptWs = wb.Sheets['PT'];
+      if (ptWs) {
+        ptWs['I4'] = { t: 'n', v: 125, f: 'ROUND(H4/12,0)' };
+        ptWs['I5'] = { t: 'n', v: 167, f: 'ROUND(H5/12,0)' };
+        ptWs['I6'] = { t: 'n', v: 208, f: 'ROUND(H6/12,0)' };
+        ptWs['I8'] = { t: 'n', v: 175, f: 'ROUND(H8/12,0)' };
+        ptWs['I9'] = { t: 'n', v: 208, f: 'ROUND(H9/12,0)' };
+        ptWs['I11'] = { t: 'n', v: 208, f: 'ROUND(H11/12,0)' };
+
+        for (let rowIdx = 1; rowIdx <= 45; rowIdx++) {
+          ['L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S'].forEach((col) => {
+            delete ptWs[`${col}${rowIdx}`];
+          });
+        }
+
+        for (const cell in ptWs) {
+          if (cell.startsWith('!')) continue;
+          const c = ptWs[cell];
+          if (c && c.f && (c.f.includes('[') || c.f.includes('_xlws') || c.f.includes('Table') || c.f.includes('#REF') || c.f.includes('#NAME'))) {
+            delete ptWs[cell];
+          }
+        }
+      }
+
       // 1. Build Monthly_Payroll_Ledger Sheet with Live Excel Formulas
       const wsLedger = {};
       const ledgerHeaders = [
@@ -930,13 +972,32 @@ class SalaryStructureController {
           calcWs[`CB${r}`] = { t: 's', f: `IF($BZ${r}="","",IFERROR(INDEX(PT!$D$3:$D$42,MATCH($BZ${r},PT!$B$3:$B$42,0)),IFERROR(INDEX(PT!$D$3:$D$42,MATCH($BZ${r},PT!$C$3:$C$42,0)),"No")))` };
           calcWs[`CC${r}`] = { t: 'n', f: `IFERROR(IF($BH${r}="","",IF(OR($BZ${r}="",$CA${r}="",$CB${r}=""),0,IFERROR(INDEX(PT!$I$3:$I$42,MATCH(1,INDEX((PT!$X$3:$X$42=$BZ${r})*(PT!$Y$3:$Y$42=$CB${r})*((PT!$E$3:$E$42=$CA${r})+(PT!$E$3:$E$42="All")>0)*(PT!$F$3:$F$42<=$BH${r})*(((ISNUMBER(PT!$G$3:$G$42))*(PT!$G$3:$G$42>=$BH${r}))+(PT!$G$3:$G$42="& Above")>0),0),0)),0))),0)` };
           calcWs[`CD${r}`] = { t: 'n', v: fixedGross };
+          delete calcWs[`CD${r}`].f;
           calcWs[`CE${r}`] = { t: 'n', f: `BV${r}-CD${r}` };
         });
+
+        // Clean empty rows in CTC_Calculator beyond actual employees
+        const maxCalcRow = employees.length + 3;
+        for (const cell in calcWs) {
+          if (cell.startsWith('!')) continue;
+          const match = cell.match(/[0-9]+/);
+          if (match && parseInt(match[0], 10) > maxCalcRow) {
+            delete calcWs[cell];
+          }
+        }
+        calcWs['!ref'] = `A1:CE${maxCalcRow}`;
       }
 
-      // 3. Populate Sheet 3: Solver
+      // 3. Populate Sheet 3: Solver (Full 60-column Dynamic Calculations)
       if (wb.Sheets['Solver']) {
         const solverWs = wb.Sheets['Solver'];
+        const grossCols = [
+          'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH'
+        ];
+        const netCols = [
+          'AI', 'AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AV', 'AW', 'AX', 'AY', 'AZ', 'BA', 'BB', 'BC', 'BD', 'BE', 'BF', 'BG', 'BH'
+        ];
+
         employees.forEach((emp, idx) => {
           const r = idx + 4;
           solverWs[`A${r}`] = { t: 'n', f: `IF(CTC_Calculator!$A${r}="","",CTC_Calculator!$A${r})` };
@@ -947,7 +1008,40 @@ class SalaryStructureController {
           solverWs[`F${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",MIN(CTC_Calculator!$AN${r},$D${r}))` };
           solverWs[`G${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",IF(CTC_Calculator!$V${r}="No",0,IF(CTC_Calculator!$W${r}="Basic",MIN(CTC_Calculator!$AN${r},$E${r}),MIN((CTC_Calculator!$AG${r}-CTC_Calculator!$AH${r}-CTC_Calculator!$AJ${r}-CTC_Calculator!$AK${r}-CTC_Calculator!$AL${r})/(1+CTC_Calculator!$X${r}),$E${r}))))` };
           solverWs[`H${r}`] = { t: 's', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",IF(CTC_Calculator!$J${r}="CTC","OK",IF(CTC_Calculator!$J${r}="Gross",IF(ABS(AH${r}-AG${r})<0.01,"OK","NOT CONVERGED"),IF(ABS(BH${r}-BG${r})<0.01,"OK","NOT CONVERGED"))))` };
+
+          // Gross basis iterations 0..25 (Cols I to AH)
+          solverWs[`I${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$A${r}="",CTC_Calculator!$K${r}=""),"",CTC_Calculator!$K${r})` };
+          for (let c = 1; c < grossCols.length; c++) {
+            const col = grossCols[c];
+            const prevCol = grossCols[c - 1];
+            solverWs[`${col}${r}`] = {
+              t: 'n',
+              f: `IF(OR(CTC_Calculator!$A${r}="",CTC_Calculator!$K${r}=""),"",CTC_Calculator!$K${r}+CTC_Calculator!$O${r}*MIN(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12),$D${r})+CTC_Calculator!$S${r}*MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)+IF(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)/12>21000,0,MAX(7000,CTC_Calculator!$I${r})*12*$C${r})+IF(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)/12>21000,MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)*$C${r},0)+CTC_Calculator!$X${r}*IF(CTC_Calculator!$V${r}="No",0,IF(CTC_Calculator!$W${r}="Basic",MIN(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12),$E${r}),MIN(CTC_Calculator!$K${r},$E${r}))))`
+            };
+          }
+
+          // Net take home basis iterations 0..25 (Cols AI to BH)
+          solverWs[`AI${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$A${r}="",CTC_Calculator!$K${r}=""),"",CTC_Calculator!$K${r})` };
+          for (let c = 1; c < netCols.length; c++) {
+            const col = netCols[c];
+            const prevCol = netCols[c - 1];
+            solverWs[`${col}${r}`] = {
+              t: 'n',
+              f: `IF(OR(CTC_Calculator!$A${r}="",CTC_Calculator!$K${r}=""),"",CTC_Calculator!$K${r}+(CTC_Calculator!$AA${r}+CTC_Calculator!$AB${r}+CTC_Calculator!$AC${r}+CTC_Calculator!$AD${r}+CTC_Calculator!$AE${r})*12+(CTC_Calculator!$P${r}+CTC_Calculator!$O${r})*MIN(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12),$D${r})+CTC_Calculator!$S${r}*MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)+IF(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)/12>21000,MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)*$C${r},0)+(CTC_Calculator!$Y${r}+CTC_Calculator!$X${r})*IF(CTC_Calculator!$V${r}="No",0,IF(CTC_Calculator!$W${r}="Basic",MIN(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12),$E${r}),MIN((${prevCol}${r}-CTC_Calculator!$O${r}*MIN(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12),$D${r})-CTC_Calculator!$S${r}*MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)-IF(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)/12>21000,0,MAX(7000,CTC_Calculator!$I${r})*12*$C${r})-IF(MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)/12>21000,MAX(CTC_Calculator!$M${r}*${prevCol}${r},CTC_Calculator!$I${r}*12)*$C${r},0))/(1+CTC_Calculator!$X${r}),$E${r}))))`
+            };
+          }
         });
+
+        // Clean empty rows in Solver beyond actual employees
+        const maxCalcRow = employees.length + 3;
+        for (const cell in solverWs) {
+          if (cell.startsWith('!')) continue;
+          const match = cell.match(/[0-9]+/);
+          if (match && parseInt(match[0], 10) > maxCalcRow) {
+            delete solverWs[cell];
+          }
+        }
+        solverWs['!ref'] = `A1:BH${maxCalcRow}`;
       }
 
       // Reorder sheets with Monthly_Payroll_Ledger first
