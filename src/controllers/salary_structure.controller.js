@@ -704,7 +704,7 @@ class SalaryStructureController {
 
   /**
    * GET /api/v1/payroll/salary-structures/export-excel
-   * Download company-wide 83-column spreadsheet matching client format
+   * Download company-wide 83-column spreadsheet matching client format with full live Excel formulas
    */
   async exportSalaryStructuresExcel(req, res, next) {
     try {
@@ -726,111 +726,238 @@ class SalaryStructureController {
       const ptSlabs = await ProfessionalTaxSlab.findAll({ raw: true });
       const minWages = await MinimumWage.findAll({ raw: true });
 
-      const exportData = [];
+      const templatePath = path.join(__dirname, '../../templates/Final_CTC_Structure_Calculator_Exgretia_Horizontal-1=.xlsx');
+      let wb;
+      if (fs.existsSync(templatePath)) {
+        wb = XLSX.readFile(templatePath, { cellFormula: true, cellStyles: true });
+      } else {
+        wb = XLSX.utils.book_new();
+      }
 
-      employees.forEach((emp, index) => {
-        const struct = (emp.salaryStructures && emp.salaryStructures[0]) || null;
-        const empState = struct?.state || emp.office?.state || 'MP';
-        const empCat = struct?.wages_category || 'Skilled';
+      // 1. Build Monthly_Payroll_Ledger Sheet with Live Excel Formulas
+      const wsLedger = {};
+      const ledgerHeaders = [
+        'Sr No', 'Employee Code', 'Employee Name', 'Department', 'Designation', 'Company', 'Location', 'State',
+        'Bank Name', 'Account Number', 'IFSC Code', 'Days in Month', 'Absent Days', 'Payable Days',
+        'Fixed Gross', 'Fixed Basic', 'Fixed HRA', 'Fixed Other Allowances',
+        'Earned Basic', 'Earned HRA', 'Earned Other Allowances', 'Arrears', 'Bonus', 'Incentive', 'Gross Earnings',
+        'PF Applicable', 'Employee PF', 'ESIC Applicable', 'Employee ESIC', 'Professional Tax (PT)',
+        'Loan EMI', 'Other Deductions', 'Total Deductions', 'Net Salary',
+        'Employer PF', 'Employer ESIC', 'Gratuity', 'Total Employer Cost', 'Total Monthly CTC', 'Annual CTC', 'Status'
+      ];
 
-        const matchedMW = minWages.find(
-          (m) => m.state.toUpperCase() === empState.toUpperCase() && m.wages_category.toUpperCase() === empCat.toUpperCase()
-        );
-        const minWageMonthly = matchedMW ? Number(matchedMW.monthly_wage) : Number(struct?.minimum_wage || 0);
-
-        const ctcAnnual = Number(struct?.annual_ctc || 0);
-        const calc = calculateSalaryStructure({
-          basis: struct?.calculation_basis || 'CTC',
-          amount: ctcAnnual > 0 ? ctcAnnual : Number(struct?.fixed_gross || 0) * 12,
-          isMonthly: false,
-          state: empState,
-          wagesCategory: empCat,
-          minimumWage: minWageMonthly,
-          basicPct: Number(struct?.basic_pct || 0.50),
-          hraPct: Number(struct?.hra_pct || 0.40),
-          pfApplicable: Boolean(struct?.pf_applicable),
-          pfWageLimit: Number(struct?.pf_wage_limit || 25000),
-          esicApplicable: Boolean(struct?.esic_applicable),
-          esicCalcBase: struct?.esic_calc_base || 'Basic',
-          esicWageLimit: Number(struct?.esic_wage_limit || 21000),
-          gratuityApplicable: Boolean(struct?.gratuity_applicable ?? true),
-          bonusApplicable: Boolean(struct?.bonus_applicable),
-          ptApplicable: Boolean(struct?.pt_applicable ?? true),
-          ptAmount: Number(struct?.pt_amount || 0),
-          gender: emp.gender || 'All',
-          currentTakeHome: Number(struct?.current_take_home || 0),
-          customPtSlabs: ptSlabs,
-        });
-
-        exportData.push({
-          'Sr No': index + 1,
-          'Employee Code': emp.emp_code,
-          'Employee Name': emp.name,
-          Designation: emp.designation,
-          Location: emp.office?.city || emp.office?.name || 'Indore',
-          Company: emp.company?.name || 'BP Marketing',
-          State: empState,
-          'Wages Category': empCat,
-          'Monthly Minimum Wages (₹)': minWageMonthly,
-          'Calculation Basis': struct?.calculation_basis || 'CTC',
-          'Amount (Annual ₹)': calc.annual.ctc,
-          'Amount (Monthly ₹)': calc.monthly.ctc,
-          'Basic %': struct?.basic_pct || 0.50,
-          'HRA %': struct?.hra_pct || 0.40,
-          'Employer PF %': 0.13,
-          'Employee PF %': 0.12,
-          'PF Applicable?': struct?.pf_applicable ? 'Yes' : 'No',
-          'PF Wage Limit (₹/month)': struct?.pf_wage_limit || 25000,
-          'Gratuity %': 0.0481,
-          'Bonus Applicable?': struct?.bonus_applicable ? 'Yes' : 'No',
-          'Bonus %': 0.0833,
-          'ESIC Applicable?': struct?.esic_applicable ? 'Yes' : 'No',
-          'ESIC Calculation Base': struct?.esic_calc_base || 'Basic',
-          'Employer ESIC %': 0.0325,
-          'Employee ESIC %': 0.0075,
-          'ESIC Wage Limit': 21000,
-          'Professional Tax (Monthly ₹)': calc.monthly.pt,
-          'Annual CTC (₹)': calc.annual.ctc,
-          'Annual Gross Salary (₹)': calc.annual.gross,
-          'Annual Basic Salary (₹)': calc.annual.basic,
-          'Annual HRA (₹)': calc.annual.hra,
-          'Annual Special Allowance (₹)': calc.annual.specialAllowance,
-          'Annual Employer PF (₹)': calc.annual.employerPf,
-          'Annual Employer ESIC (₹)': calc.annual.employerEsic,
-          'Annual Gratuity (₹)': calc.annual.gratuity,
-          'Annual Statutory Bonus (₹)': calc.annual.statutoryBonus,
-          'Annual Exgratia Bonus (₹)': calc.annual.exgratiaBonus,
-          'Annual Employee PF (₹)': calc.annual.employeePf,
-          'Annual Employee ESIC (₹)': calc.annual.employeeEsic,
-          'Annual Professional Tax (₹)': calc.annual.pt,
-          'Annual Total Deductions (₹)': calc.annual.totalDeductions,
-          'Annual Net Take-Home (₹)': calc.annual.netTakeHome,
-          'Monthly Gross Salary (₹)': calc.monthly.gross,
-          'Monthly Basic Salary (₹)': calc.monthly.basic,
-          'Monthly HRA (₹)': calc.monthly.hra,
-          'Monthly Special Allowance (₹)': calc.monthly.specialAllowance,
-          'Monthly Net Take-Home (₹)': calc.monthly.netTakeHome,
-          'Previous Take Home (₹)': Number(struct?.current_take_home || 0),
-          'Difference in TH (₹)': calc.meta.differenceInTakeHome,
-          'Basic Calculate on': calc.meta.basicCalculatedOn,
-        });
+      ledgerHeaders.forEach((h, colIdx) => {
+        const cellRef = XLSX.utils.encode_cell({ r: 0, c: colIdx });
+        wsLedger[cellRef] = { t: 's', v: h };
       });
 
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      XLSX.utils.book_append_sheet(wb, ws, 'CTC_Roster');
+      employees.forEach((emp, index) => {
+        const r = index + 2;
+        const struct = (emp.salaryStructures && emp.salaryStructures[0]) || null;
+        const fixedGross = Number(struct?.fixed_gross || emp.fixed_gross || 0);
+        const fixedBasic = Math.round(fixedGross * 0.50);
+        const fixedHra = Math.round(fixedBasic * 0.40);
+        const fixedOther = Math.max(0, fixedGross - fixedBasic - fixedHra);
+        const daysInMonth = 30;
+        const absentDays = 0;
+        const payableDays = daysInMonth - absentDays;
 
-      // Also append Minimum Wages and PT Slabs sheets
-      const wsMW = XLSX.utils.json_to_sheet(minWages);
-      XLSX.utils.book_append_sheet(wb, wsMW, 'Minimum_Wages');
+        const pfApplicable = struct ? Boolean(struct.pf_applicable) : Boolean(emp.pf_applicable);
+        const pfCeiling = struct ? Boolean(struct.pf_ceiling) : Boolean(emp.pf_ceiling);
+        const esicApplicable = struct ? Boolean(struct.esic_applicable) : Boolean(emp.esic_applicable);
 
-      const wsPT = XLSX.utils.json_to_sheet(ptSlabs);
-      XLSX.utils.book_append_sheet(wb, wsPT, 'PT_Slabs');
+        const basic = Math.round((fixedBasic / daysInMonth) * payableDays);
+        const hra = Math.round((fixedHra / daysInMonth) * payableDays);
+        const other = Math.round((fixedOther / daysInMonth) * payableDays);
+        const grossEarnings = basic + hra + other;
+
+        const pf = pfApplicable ? Math.round(Math.min(basic, pfCeiling ? 15000 : basic) * 0.12) : 0;
+        const esi = esicApplicable && grossEarnings <= 21000 ? Math.ceil(grossEarnings * 0.0075) : 0;
+        let pt = 0;
+        if (struct ? struct.pt_applicable !== false : emp.pt_applicable !== false) {
+          if (grossEarnings > 33333) pt = 208;
+          else if (grossEarnings > 25000) pt = 167;
+          else if (grossEarnings > 15000) pt = 125;
+        }
+
+        const totalDeductions = pf + esi + pt;
+        const net = grossEarnings - totalDeductions;
+        const pfEmployer = pfApplicable ? Math.round(Math.min(basic, pfCeiling ? 15000 : basic) * 0.13) : 0;
+        const esiEmployer = esicApplicable && grossEarnings <= 21000 ? Math.ceil(grossEarnings * 0.0325) : 0;
+        const gratuity = Math.round(basic * 0.0481);
+        const totalEmployerCost = pfEmployer + esiEmployer + gratuity;
+        const monthlyCtc = grossEarnings + totalEmployerCost;
+        const annualCtc = monthlyCtc * 12;
+
+        wsLedger[`A${r}`] = { t: 'n', v: index + 1 };
+        wsLedger[`B${r}`] = { t: 's', v: emp.emp_code || '' };
+        wsLedger[`C${r}`] = { t: 's', v: emp.name || '' };
+        wsLedger[`D${r}`] = { t: 's', v: emp.department || 'Operations' };
+        wsLedger[`E${r}`] = { t: 's', v: emp.designation || 'Staff' };
+        wsLedger[`F${r}`] = { t: 's', v: emp.company?.name || 'BP Marketing' };
+        wsLedger[`G${r}`] = { t: 's', v: emp.office?.city || emp.office?.name || 'Indore' };
+        wsLedger[`H${r}`] = { t: 's', v: struct?.state || emp.office?.state || 'MP' };
+        wsLedger[`I${r}`] = { t: 's', v: emp.bank_name || '—' };
+        wsLedger[`J${r}`] = { t: 's', v: emp.bank_account_no || '—' };
+        wsLedger[`K${r}`] = { t: 's', v: emp.bank_ifsc || '—' };
+        wsLedger[`L${r}`] = { t: 'n', v: daysInMonth };
+        wsLedger[`M${r}`] = { t: 'n', v: absentDays };
+        wsLedger[`N${r}`] = { t: 'n', f: `L${r}-M${r}`, v: payableDays };
+        wsLedger[`O${r}`] = { t: 'n', v: fixedGross };
+        wsLedger[`P${r}`] = { t: 'n', f: `ROUND(O${r}*0.5,0)`, v: fixedBasic };
+        wsLedger[`Q${r}`] = { t: 'n', f: `ROUND(P${r}*0.4,0)`, v: fixedHra };
+        wsLedger[`R${r}`] = { t: 'n', f: `MAX(0,O${r}-P${r}-Q${r})`, v: fixedOther };
+        wsLedger[`S${r}`] = { t: 'n', f: `ROUND((P${r}/L${r})*N${r},0)`, v: basic };
+        wsLedger[`T${r}`] = { t: 'n', f: `ROUND((Q${r}/L${r})*N${r},0)`, v: hra };
+        wsLedger[`U${r}`] = { t: 'n', f: `ROUND((R${r}/L${r})*N${r},0)`, v: other };
+        wsLedger[`V${r}`] = { t: 'n', v: 0 };
+        wsLedger[`W${r}`] = { t: 'n', v: 0 };
+        wsLedger[`X${r}`] = { t: 'n', v: 0 };
+        wsLedger[`Y${r}`] = { t: 'n', f: `SUM(S${r}:X${r})`, v: grossEarnings };
+        wsLedger[`Z${r}`] = { t: 's', v: pfApplicable ? 'Yes' : 'No' };
+        wsLedger[`AA${r}`] = { t: 'n', f: `IF(Z${r}="Yes",ROUND(MIN(S${r},15000)*0.12,0),0)`, v: pf };
+        wsLedger[`AB${r}`] = { t: 's', v: esicApplicable ? 'Yes' : 'No' };
+        wsLedger[`AC${r}`] = { t: 'n', f: `IF(AB${r}="Yes",IF(Y${r}<=21000,ROUND(Y${r}*0.0075,0),0),0)`, v: esi };
+        wsLedger[`AD${r}`] = { t: 'n', v: pt };
+        wsLedger[`AE${r}`] = { t: 'n', v: 0 };
+        wsLedger[`AF${r}`] = { t: 'n', v: 0 };
+        wsLedger[`AG${r}`] = { t: 'n', f: `SUM(AA${r},AC${r},AD${r},AE${r},AF${r})`, v: totalDeductions };
+        wsLedger[`AH${r}`] = { t: 'n', f: `Y${r}-AG${r}`, v: net };
+        wsLedger[`AI${r}`] = { t: 'n', f: `IF(Z${r}="Yes",ROUND(MIN(S${r},15000)*0.13,0),0)`, v: pfEmployer };
+        wsLedger[`AJ${r}`] = { t: 'n', f: `IF(AB${r}="Yes",IF(Y${r}<=21000,ROUND(Y${r}*0.0325,0),0),0)`, v: esiEmployer };
+        wsLedger[`AK${r}`] = { t: 'n', f: `ROUND(S${r}*0.0481,0)`, v: gratuity };
+        wsLedger[`AL${r}`] = { t: 'n', f: `SUM(AI${r}:AK${r})`, v: totalEmployerCost };
+        wsLedger[`AM${r}`] = { t: 'n', f: `Y${r}+AL${r}`, v: monthlyCtc };
+        wsLedger[`AN${r}`] = { t: 'n', f: `AM${r}*12`, v: annualCtc };
+        wsLedger[`AO${r}`] = { t: 's', v: 'Verified' };
+      });
+
+      const lastRow = employees.length + 1;
+      const totRow = lastRow + 1;
+      wsLedger[`A${totRow}`] = { t: 's', v: 'TOTAL' };
+      ['O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'AA', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH', 'AI', 'AJ', 'AK', 'AL', 'AM', 'AN'].forEach(col => {
+        wsLedger[`${col}${totRow}`] = { t: 'n', f: `SUM(${col}2:${col}${lastRow})` };
+      });
+      wsLedger['!ref'] = `A1:AO${totRow}`;
+
+      // 2. Populate Sheet 2: CTC_Calculator
+      if (wb.Sheets['CTC_Calculator']) {
+        const calcWs = wb.Sheets['CTC_Calculator'];
+        employees.forEach((emp, idx) => {
+          const r = idx + 4;
+          const struct = (emp.salaryStructures && emp.salaryStructures[0]) || null;
+          const fixedGross = Number(struct?.fixed_gross || emp.fixed_gross || 0);
+          const annualAmount = fixedGross * 12;
+
+          calcWs[`A${r}`] = { t: 'n', v: idx + 1 };
+          calcWs[`B${r}`] = { t: 's', v: String(emp.emp_code || '') };
+          calcWs[`C${r}`] = { t: 's', v: String(emp.name || '') };
+          calcWs[`D${r}`] = { t: 's', v: String(emp.designation || 'Staff') };
+          calcWs[`E${r}`] = { t: 's', v: String(emp.office?.city || emp.office?.name || 'Indore') };
+          calcWs[`F${r}`] = { t: 's', v: String(emp.company?.name || 'BP Marketing') };
+          calcWs[`G${r}`] = { t: 's', v: String(struct?.state || emp.office?.state || 'MP') };
+          calcWs[`H${r}`] = { t: 's', v: String(struct?.wages_category || 'Skilled') };
+          calcWs[`I${r}`] = { t: 'n', f: `IF(OR($G${r}="",$H${r}=""),0,SUMPRODUCT(MAX(('Minimum Wages'!$A$2:$A$300=$G${r})*('Minimum Wages'!$B$2:$B$300=$H${r})*'Minimum Wages'!$C$2:$C$300)))` };
+          calcWs[`J${r}`] = { t: 's', v: 'CTC' };
+          calcWs[`K${r}`] = { t: 'n', v: annualAmount };
+          calcWs[`L${r}`] = { t: 'n', f: `IF($K${r}="","",$K${r}/12)` };
+          calcWs[`M${r}`] = { t: 'n', v: 0.50 };
+          calcWs[`N${r}`] = { t: 'n', v: 0.40 };
+          calcWs[`O${r}`] = { t: 'n', v: 0.13 };
+          calcWs[`P${r}`] = { t: 'n', v: 0.12 };
+          calcWs[`Q${r}`] = { t: 's', v: (struct ? struct.pf_applicable : emp.pf_applicable) ? 'Yes' : 'No' };
+          calcWs[`R${r}`] = { t: 'n', v: 25000 };
+          calcWs[`S${r}`] = { t: 'n', v: 0.0481 };
+          calcWs[`T${r}`] = { t: 's', v: 'Yes' };
+          calcWs[`U${r}`] = { t: 'n', v: 0.0833 };
+          calcWs[`V${r}`] = { t: 's', v: (struct ? struct.esic_applicable : emp.esic_applicable) ? 'Yes' : 'No' };
+          calcWs[`W${r}`] = { t: 's', v: 'Basic' };
+          calcWs[`X${r}`] = { t: 'n', v: 0.0325 };
+          calcWs[`Y${r}`] = { t: 'n', v: 0.0075 };
+          calcWs[`Z${r}`] = { t: 'n', v: 21000 };
+          calcWs[`AA${r}`] = { t: 'n', f: `CC${r}` };
+          calcWs[`AB${r}`] = { t: 'n', v: 0 };
+          calcWs[`AC${r}`] = { t: 'n', v: 0 };
+          calcWs[`AD${r}`] = { t: 'n', v: 0 };
+          calcWs[`AE${r}`] = { t: 'n', v: 0 };
+          calcWs[`AF${r}`] = { t: 'n', v: 0 };
+          calcWs[`AG${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",IF($J${r}="CTC",$K${r},IF($J${r}="Gross",Solver!$AH${r},IF($J${r}="Net Take Home",Solver!$BH${r},""))))` };
+          calcWs[`AH${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",Solver!$F${r}*$O${r})` };
+          calcWs[`AI${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",Solver!$G${r}*$X${r})` };
+          calcWs[`AJ${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AN${r}*$S${r})` };
+          calcWs[`AK${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",IF($AN${r}/12>21000,0,MAX(7000,$I${r})*12*Solver!$C${r}))` };
+          calcWs[`AL${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",IF($AN${r}/12>21000,$AN${r}*Solver!$C${r},0))` };
+          calcWs[`AM${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AG${r}-$AH${r}-$AI${r}-$AJ${r}-$AK${r}-$AL${r})` };
+          calcWs[`AN${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",MAX($AG${r}*$M${r},$I${r}*12))` };
+          calcWs[`AO${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",MAX(0,MIN($AN${r}*$N${r},ROUND($AM${r}-$AN${r},2))))` };
+          calcWs[`AP${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",MAX(0,MIN($AF${r},ROUND($AM${r}-$AN${r}-$AO${r},2))))` };
+          calcWs[`AQ${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",ROUND($AM${r}-$AN${r}-$AO${r}-$AP${r},2))` };
+          calcWs[`AR${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AM${r})` };
+          calcWs[`AS${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",Solver!$F${r}*$P${r})` };
+          calcWs[`AT${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",Solver!$G${r}*$Y${r})` };
+          calcWs[`AU${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AA${r}*12)` };
+          calcWs[`AV${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AB${r}*12)` };
+          calcWs[`AW${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AC${r}*12)` };
+          calcWs[`AX${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AD${r}*12)` };
+          calcWs[`AY${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AE${r}*12)` };
+          calcWs[`AZ${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",SUM($AS${r}:$AY${r}))` };
+          calcWs[`BA${r}`] = { t: 'n', f: `IF(OR($J${r}="",$K${r}=""),"",$AR${r}-$AZ${r})` };
+          calcWs[`BB${r}`] = { t: 'n', f: `IF(AG${r}="","",AG${r}/12)` };
+          calcWs[`BC${r}`] = { t: 'n', f: `IF(AH${r}="","",AH${r}/12)` };
+          calcWs[`BD${r}`] = { t: 'n', f: `IF(AI${r}="","",AI${r}/12)` };
+          calcWs[`BE${r}`] = { t: 'n', f: `IF(AJ${r}="","",AJ${r}/12)` };
+          calcWs[`BF${r}`] = { t: 'n', f: `IF(AK${r}="","",AK${r}/12)` };
+          calcWs[`BG${r}`] = { t: 'n', f: `IF(AL${r}="","",AL${r}/12)` };
+          calcWs[`BH${r}`] = { t: 'n', f: `IF(AM${r}="","",AM${r}/12)` };
+          calcWs[`BI${r}`] = { t: 'n', f: `IF(AN${r}="","",AN${r}/12)` };
+          calcWs[`BJ${r}`] = { t: 'n', f: `IF(AO${r}="","",AO${r}/12)` };
+          calcWs[`BK${r}`] = { t: 'n', f: `IF(AP${r}="","",AP${r}/12)` };
+          calcWs[`BL${r}`] = { t: 'n', f: `IF(AQ${r}="","",AQ${r}/12)` };
+          calcWs[`BM${r}`] = { t: 'n', f: `IF(AR${r}="","",AR${r}/12)` };
+          calcWs[`BN${r}`] = { t: 'n', f: `IF(AS${r}="","",AS${r}/12)` };
+          calcWs[`BO${r}`] = { t: 'n', f: `IF(AT${r}="","",AT${r}/12)` };
+          calcWs[`BP${r}`] = { t: 'n', f: `IF(AU${r}="","",AU${r}/12)` };
+          calcWs[`BQ${r}`] = { t: 'n', f: `IF(AV${r}="","",AV${r}/12)` };
+          calcWs[`BR${r}`] = { t: 'n', f: `IF(AW${r}="","",AW${r}/12)` };
+          calcWs[`BS${r}`] = { t: 'n', f: `IF(AX${r}="","",AX${r}/12)` };
+          calcWs[`BT${r}`] = { t: 'n', f: `IF(AY${r}="","",AY${r}/12)` };
+          calcWs[`BU${r}`] = { t: 'n', f: `IF(AZ${r}="","",AZ${r}/12)` };
+          calcWs[`BV${r}`] = { t: 'n', f: `IF(BA${r}="","",BA${r}/12)` };
+          calcWs[`BW${r}`] = { t: 's', f: `IF(OR($J${r}="",$K${r}=""),"",IF($I${r}*12>$AG${r}*$M${r},"Minimum Wage","% of CTC"))` };
+          calcWs[`BX${r}`] = { t: 's', f: `IF(OR($J${r}="",$K${r}=""),"",IF(Solver!$H${r}<>"OK","NOT CONVERGED",IF(AND(ABS($AM${r}+$AH${r}+$AI${r}+$AJ${r}+$AK${r}+$AL${r}-$AG${r})<0.01,OR($J${r}="CTC",AND($J${r}="Gross",ABS($AM${r}-$K${r})<1),AND($J${r}="Net Take Home",ABS($BA${r}-$K${r})<1))),"OK","CHECK")))` };
+          calcWs[`BZ${r}`] = { t: 's', v: (struct?.state || emp.office?.state) === 'MP' ? 'Madhya Pradesh' : (struct?.state || emp.office?.state || 'Madhya Pradesh') };
+          calcWs[`CA${r}`] = { t: 's', v: emp.gender || 'All' };
+          calcWs[`CB${r}`] = { t: 's', f: `IF($BZ${r}="","",IFERROR(INDEX(PT!$D$3:$D$42,MATCH($BZ${r},PT!$B$3:$B$42,0)),IFERROR(INDEX(PT!$D$3:$D$42,MATCH($BZ${r},PT!$C$3:$C$42,0)),"No")))` };
+          calcWs[`CC${r}`] = { t: 'n', f: `IFERROR(IF($BH${r}="","",IF(OR($BZ${r}="",$CA${r}="",$CB${r}=""),0,IFERROR(INDEX(PT!$I$3:$I$42,MATCH(1,INDEX((PT!$X$3:$X$42=$BZ${r})*(PT!$Y$3:$Y$42=$CB${r})*((PT!$E$3:$E$42=$CA${r})+(PT!$E$3:$E$42="All")>0)*(PT!$F$3:$F$42<=$BH${r})*(((ISNUMBER(PT!$G$3:$G$42))*(PT!$G$3:$G$42>=$BH${r}))+(PT!$G$3:$G$42="& Above")>0),0),0)),0))),0)` };
+          calcWs[`CD${r}`] = { t: 'n', v: fixedGross };
+          calcWs[`CE${r}`] = { t: 'n', f: `BV${r}-CD${r}` };
+        });
+      }
+
+      // 3. Populate Sheet 3: Solver
+      if (wb.Sheets['Solver']) {
+        const solverWs = wb.Sheets['Solver'];
+        employees.forEach((emp, idx) => {
+          const r = idx + 4;
+          solverWs[`A${r}`] = { t: 'n', f: `IF(CTC_Calculator!$A${r}="","",CTC_Calculator!$A${r})` };
+          solverWs[`B${r}`] = { t: 's', f: `IF(CTC_Calculator!$B${r}="","",CTC_Calculator!$B${r})` };
+          solverWs[`C${r}`] = { t: 'n', f: `IF(CTC_Calculator!$T${r}="Yes",CTC_Calculator!$U${r},0)` };
+          solverWs[`D${r}`] = { t: 'n', f: `IF(CTC_Calculator!$Q${r}="Yes",IF(CTC_Calculator!$R${r}>0,CTC_Calculator!$R${r}*12,1000000000000000),0)` };
+          solverWs[`E${r}`] = { t: 'n', f: `IF(CTC_Calculator!$V${r}="Yes",IF(CTC_Calculator!$Z${r}>0,CTC_Calculator!$Z${r}*12,1000000000000000),0)` };
+          solverWs[`F${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",MIN(CTC_Calculator!$AN${r},$D${r}))` };
+          solverWs[`G${r}`] = { t: 'n', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",IF(CTC_Calculator!$V${r}="No",0,IF(CTC_Calculator!$W${r}="Basic",MIN(CTC_Calculator!$AN${r},$E${r}),MIN((CTC_Calculator!$AG${r}-CTC_Calculator!$AH${r}-CTC_Calculator!$AJ${r}-CTC_Calculator!$AK${r}-CTC_Calculator!$AL${r})/(1+CTC_Calculator!$X${r}),$E${r}))))` };
+          solverWs[`H${r}`] = { t: 's', f: `IF(OR(CTC_Calculator!$J${r}="",CTC_Calculator!$K${r}=""),"",IF(CTC_Calculator!$J${r}="CTC","OK",IF(CTC_Calculator!$J${r}="Gross",IF(ABS(AH${r}-AG${r})<0.01,"OK","NOT CONVERGED"),IF(ABS(BH${r}-BG${r})<0.01,"OK","NOT CONVERGED"))))` };
+        });
+      }
+
+      // Reorder sheets with Monthly_Payroll_Ledger first
+      wb.SheetNames = ['Monthly_Payroll_Ledger', 'CTC_Calculator', 'Solver', 'Minimum Wages', 'PT'];
+      wb.Sheets['Monthly_Payroll_Ledger'] = wsLedger;
 
       const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="Company_CTC_Structure_Roster.xlsx"');
+      res.setHeader('Content-Disposition', 'attachment; filename="Company_CTC_Structure_Master.xlsx"');
       return res.send(buffer);
     } catch (err) {
       logger.error('Error exporting salary structures excel:', err);
